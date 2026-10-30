@@ -53,22 +53,32 @@ var ex2FanBits = [...]struct {
 	{ex2FanReg2, 0x1},
 }
 
-func (f EX2) Set(level int) error {
+// Ex2FanPlan computes the register writes Set(level) would perform,
+// without touching any hardware - the pure half of EX2.Set, used
+// directly by the CLI's -n/--dry-run and -D/--debug (and by Set
+// itself).
+func Ex2FanPlan(level int) ([]regio.Write, error) {
 	if level < 0 || level > 6 {
-		return fmt.Errorf("fan: EX2 level must be 0-6, got %d", level)
+		return nil, fmt.Errorf("fan: EX2 level must be 0-6, got %d", level)
 	}
 
-	// Clear_All_Fan_Register, reproduced exactly.
-	if err := f.Mem.SetClearBits(ex2FanReg1, 0, ex2FanClearMask1); err != nil {
-		return err
+	// Clear_All_Fan_Register, reproduced exactly - always runs, even
+	// for level 0, matching the vendor's own unconditional clear.
+	ws := []regio.Write{
+		{Addr: ex2FanReg1, Clear: ex2FanClearMask1},
+		{Addr: ex2FanReg2, Clear: ex2FanClearMask2},
 	}
-	if err := f.Mem.SetClearBits(ex2FanReg2, 0, ex2FanClearMask2); err != nil {
-		return err
-	}
-
 	if level == 0 {
-		return nil // Stop: every fan bit already cleared above.
+		return ws, nil // Stop: every fan bit already cleared above.
 	}
 	b := ex2FanBits[level-1]
-	return f.Mem.SetClearBits(b.reg, b.bit, 0)
+	return append(ws, regio.Write{Addr: b.reg, Set: b.bit}), nil
+}
+
+func (f EX2) Set(level int) error {
+	ws, err := Ex2FanPlan(level)
+	if err != nil {
+		return err
+	}
+	return f.Mem.ApplyAll(ws)
 }

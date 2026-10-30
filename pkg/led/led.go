@@ -22,12 +22,40 @@ const (
 	HD3
 )
 
+func (z Zone) String() string {
+	switch z {
+	case Power:
+		return "power"
+	case HD0:
+		return "hd0"
+	case HD1:
+		return "hd1"
+	case HD2:
+		return "hd2"
+	case HD3:
+		return "hd3"
+	default:
+		return "unknown"
+	}
+}
+
 type Color int
 
 const (
 	Red Color = iota
 	Blue
 )
+
+func (c Color) String() string {
+	switch c {
+	case Red:
+		return "red"
+	case Blue:
+		return "blue"
+	default:
+		return "unknown"
+	}
+}
 
 type State int
 
@@ -36,6 +64,19 @@ const (
 	On
 	Blinking
 )
+
+func (s State) String() string {
+	switch s {
+	case Off:
+		return "off"
+	case On:
+		return "on"
+	case Blinking:
+		return "blinking"
+	default:
+		return "unknown"
+	}
+}
 
 const (
 	powerDataOut = 0xF1010100
@@ -55,7 +96,7 @@ const (
 // SATA-controller register space (0xE0000000+) rather than this GPIO
 // window for at least one call site, which may mean hd-bay blue is
 // actually driven by a SATA activity indicator, not plain GPIO. This
-// has NOT been confirmed on real hardware. Treat Set(HD0..HD3, Blue,
+// has NOT been confirmed on real hardware. Treat Plan(HD0..HD3, Blue,
 // ...) as best-effort until verified - see SPEC.md, "unresolved".
 func hdBayBit(zone Zone) (uint32, error) {
 	var idx int
@@ -85,14 +126,17 @@ func colorBit(c Color) (uint32, uint32, error) {
 	}
 }
 
-// Set drives zone's color LED to state. Mirrors the vendor handlers'
-// own logic exactly: the two colors on one zone are mutually
-// exclusive (the other color's bit is always cleared first), and
-// "blinking" sets the bit in BOTH the Data-Out and Blink-Enable
-// registers - blinking is a genuine hardware feature of the SoC's
-// GPIO controller (confirmed by EX2's own `led --help` text: "blue
+// Plan computes the register writes driving zone's color LED to
+// state would perform, without touching any hardware - the pure half
+// of Set, used directly by the CLI's -n/--dry-run and -D/--debug
+// (and by Set itself). Mirrors the vendor handlers' own logic
+// exactly: the two colors on one zone are mutually exclusive (the
+// other color's bit is always cleared first), and "blinking" sets
+// the bit in BOTH the Data-Out and Blink-Enable registers - blinking
+// is a genuine hardware feature of the SoC's GPIO controller
+// (confirmed by EX2's own `led --help` text: "blue
 // blinking(controlled by hw)"), not a software timer loop.
-func Set(mem *regio.Mem, zone Zone, color Color, state State) error {
+func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 	var dataOut, blinkEn int64
 	var ownBit uint32
 	var otherBit uint32
@@ -109,37 +153,41 @@ func Set(mem *regio.Mem, zone Zone, color Color, state State) error {
 		// here, so otherBit stays 0.
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	var ws []regio.Write
 
 	// Clear the other color first (power LED only - mutual exclusion
 	// confirmed there; no-op elsewhere since otherBit==0).
 	if otherBit != 0 {
-		if err := mem.SetClearBits(dataOut, 0, otherBit); err != nil {
-			return err
-		}
-		if err := mem.SetClearBits(blinkEn, 0, otherBit); err != nil {
-			return err
-		}
+		ws = append(ws, regio.Write{Addr: dataOut, Clear: otherBit})
+		ws = append(ws, regio.Write{Addr: blinkEn, Clear: otherBit})
 	}
 
 	switch state {
 	case Off:
-		if err := mem.SetClearBits(dataOut, 0, ownBit); err != nil {
-			return err
-		}
-		return mem.SetClearBits(blinkEn, 0, ownBit)
+		ws = append(ws, regio.Write{Addr: dataOut, Clear: ownBit})
+		ws = append(ws, regio.Write{Addr: blinkEn, Clear: ownBit})
 	case On:
-		if err := mem.SetClearBits(dataOut, ownBit, 0); err != nil {
-			return err
-		}
-		return mem.SetClearBits(blinkEn, 0, ownBit)
+		ws = append(ws, regio.Write{Addr: dataOut, Set: ownBit})
+		ws = append(ws, regio.Write{Addr: blinkEn, Clear: ownBit})
 	case Blinking:
-		if err := mem.SetClearBits(dataOut, ownBit, 0); err != nil {
-			return err
-		}
-		return mem.SetClearBits(blinkEn, ownBit, 0)
+		ws = append(ws, regio.Write{Addr: dataOut, Set: ownBit})
+		ws = append(ws, regio.Write{Addr: blinkEn, Set: ownBit})
 	default:
-		return errBadState(state)
+		return nil, errBadState(state)
 	}
+
+	return ws, nil
+}
+
+// Set drives zone's color LED to state against real (or fake, in
+// tests) register-mapped memory.
+func Set(mem *regio.Mem, zone Zone, color Color, state State) error {
+	ws, err := Plan(zone, color, state)
+	if err != nil {
+		return err
+	}
+	return mem.ApplyAll(ws)
 }

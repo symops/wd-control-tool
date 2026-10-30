@@ -39,3 +39,51 @@ func TestEX2UFanPercent_RejectsUnsupported(t *testing.T) {
 		}
 	}
 }
+
+// EX2UFanPercentFrame/EX2ULEDFrame are the pure builders the CLI's
+// -n/--dry-run and -D/--debug use; pin them against the same golden
+// bytes TestEX2UFrames checks, plus their own rejection paths.
+
+func TestEX2UFanPercentFrame(t *testing.T) {
+	cases := map[int]byte{0: 0x00, 25: 0x40, 50: 0x80, 75: 0xC0, 100: 0xFF}
+	for pct, b := range cases {
+		got, err := EX2UFanPercentFrame(pct)
+		if err != nil {
+			t.Fatalf("EX2UFanPercentFrame(%d): %v", pct, err)
+		}
+		want := []byte{0xFA, 0x02, 0x00, b, 0x00, 0x00, 0xFB}
+		if !bytes.Equal(got, want) {
+			t.Errorf("EX2UFanPercentFrame(%d) = % X, want % X", pct, got, want)
+		}
+	}
+}
+
+func TestEX2UFanPercentFrame_RejectsUnsupported(t *testing.T) {
+	for _, bad := range []int{1, 10, 33, 51, 101, -1} {
+		if _, err := EX2UFanPercentFrame(bad); err == nil {
+			t.Errorf("EX2UFanPercentFrame(%d): want error, got nil", bad)
+		}
+	}
+}
+
+func TestEX2ULEDFrame(t *testing.T) {
+	cases := map[string]byte{"on": 0x01, "off": 0x00, "blinking": 0x02, "blink": 0x02, "breathing": 0x04, "breathe": 0x04}
+	for state, b := range cases {
+		got, err := EX2ULEDFrame(state)
+		if err != nil {
+			t.Fatalf("EX2ULEDFrame(%q): %v", state, err)
+		}
+		want := []byte{0xFA, 0x03, 0x06, b, 0x00, 0x00, 0xFB}
+		if !bytes.Equal(got, want) {
+			t.Errorf("EX2ULEDFrame(%q) = % X, want % X", state, got, want)
+		}
+	}
+}
+
+func TestEX2ULEDFrame_RejectsUnknownState(t *testing.T) {
+	for _, bad := range []string{"", "ON", "flashing", "breath"} {
+		if _, err := EX2ULEDFrame(bad); err == nil {
+			t.Errorf("EX2ULEDFrame(%q): want error, got nil", bad)
+		}
+	}
+}

@@ -33,19 +33,36 @@ of its real silicon. Copy the matching binary to the board and
 ## Quick start
 
 ```sh
-wd-control-tool -b ex2u fan 50                       # EX2U: 50% duty cycle
-wd-control-tool -b ex2u led breathing                # EX2U: status LED breathing
+wd-control-tool -b ex2u -f -c 50                        # EX2U: 50% duty cycle
+wd-control-tool -b ex2u -l -c breathing                 # EX2U: status LED breathing
 
-wd-control-tool -b ex2 fan 3                          # EX2: ~6000rpm step (see SPEC.md - exact step order not independently confirmed)
-wd-control-tool -b ex2 led power blue on
+wd-control-tool -b ex2 -f -c 3                           # EX2: ~6000rpm step (see SPEC.md - exact step order not independently confirmed)
+wd-control-tool -b ex2 --led -c power blue on
 
-wd-control-tool -b ex4 fan 2                           # EX4: Medium
-wd-control-tool -b ex4 led power blue on
-wd-control-tool -b ex4 display "Booting..."
-wd-control-tool -b ex4 rtc write                       # push the host's current time to the MCU RTC
+wd-control-tool -b ex4 -f -c 2                            # EX4: Medium
+wd-control-tool -b ex4 --led -c power blue on
+wd-control-tool -b ex4 --display -c "Booting..."
+wd-control-tool -b ex4 -r -c write                        # push the host's current time to the MCU RTC
+
+wd-control-tool -b ex4 -n -D --led -c power blue on       # preview the exact bytes/registers, touch nothing
 ```
 
 - `-b`/`--board` selects the board: `ex2u`, `ex2` or `ex4` (required).
+- Exactly one of `-l/--led`, `-f/--fan`, `-r/--rtc`, `-d/--display`
+  selects what `-c`'s arguments mean.
+- **`-c`/`--command` must come last.** Everything after it is taken
+  verbatim as the selected command's own argument list and is never
+  parsed as a flag, even if it looks like one - put `-n`/`-D` (and
+  `-b` and the mode flag) *before* `-c`, not after.
+- `-n`, `--dry-run` - print what would be done, touch no hardware.
+  Combines with everything; on its own (no mode flag) it is a usage
+  error. Exits 0 whenever the simulation itself completed, even if it
+  reports that the real run would fail.
+- `-D`, `--debug` - print extra diagnostics (the exact frame bytes
+  that would go out the UART, or the exact `/dev/mem` addresses and
+  set/clear masks) alongside normal output. Changes nothing about
+  what is done.
+- `-h`, `--help` / `-v`, `--version` - must be used alone.
 - `--serial PATH` overrides the MCU UART device (default
   `/dev/ttyS1`, confirmed for EX2/EX4; **EX2U's actual tty node is
   not yet confirmed** - override if `/dev/ttyS1` is wrong on that
@@ -53,13 +70,13 @@ wd-control-tool -b ex4 rtc write                       # push the host's current
 
 ## Command reference
 
-| Command | Boards | Notes |
-|---|---|---|
-| `fan LEVEL` | all | Board-native units, NOT a common 0-100 scale: EX2U 0/25/50/75/100 (duty %), EX4 0-4 (Stop..Highest), EX2 0-6 (Stop + 6 fixed RPM steps). See SPEC.md, "Fan control". |
-| `led ZONE COLOR STATE` | ex2, ex4 | zones: `power`, `hd0`, `hd1` (+`hd2`,`hd3` on EX4); colors: `red`, `blue`; states: `on`, `off`, `blinking`. |
-| `led STATE` | ex2u | states: `on`, `off`, `blinking`, `breathing` - EX2U's single status LED, not a zone/color scheme. |
-| `display TEXT` | ex4 | Writes to the front-panel LCD. Not truncated/wrapped by this tool or the protocol - see SPEC.md. |
-| `rtc write` | ex4 | Pushes the host's current time to the MCU RTC. **EX2 not yet implemented** (frame layout unconfirmed); **no board supports reading the RTC back** yet (see SPEC.md). |
+| Flag | Boards | `-c`'s arguments | Notes |
+|---|---|---|---|
+| `-f`, `--fan` | all | `LEVEL` | Board-native units, NOT a common 0-100 scale: EX2U 0/25/50/75/100 (duty %), EX4 0-4 (Stop..Highest), EX2 0-6 (Stop + 6 fixed RPM steps). See SPEC.md, "Fan control". |
+| `-l`, `--led` | ex2, ex4 | `ZONE COLOR STATE` | zones: `power`, `hd0`, `hd1` (+`hd2`,`hd3` on EX4); colors: `red`, `blue`; states: `on`, `off`, `blinking`. |
+| `-l`, `--led` | ex2u | `STATE` | states: `on`, `off`, `blinking`, `breathing` - EX2U's single status LED, not a zone/color scheme. |
+| `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated/wrapped by this tool or the protocol - see SPEC.md. |
+| `-r`, `--rtc` | ex4 | `write` | Pushes the host's current time to the MCU RTC. **EX2 not yet implemented** (frame layout unconfirmed); **no board supports reading the RTC back** yet (see SPEC.md). |
 
 No generic "all boards" fallback exists anywhere: every command's
 actual mechanism differs per board (see SPEC.md), and this tool

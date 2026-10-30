@@ -108,3 +108,30 @@ func (m *Mem) SetClearBits(addr int64, set, clear uint32) error {
 	v &^= clear
 	return m.WriteReg32(addr, v)
 }
+
+// Write is one planned register read-modify-write - the pure,
+// no-I/O half of a register operation, so callers (the CLI's
+// -n/--dry-run and -D/--debug) can describe what would happen before
+// (or without) touching /dev/mem. See pkg/led.Plan and
+// pkg/fan.Ex2FanPlan, which build these; Apply is the only thing that
+// actually performs one.
+type Write struct {
+	Addr       int64
+	Set, Clear uint32
+}
+
+// Apply performs one planned Write.
+func (m *Mem) Apply(w Write) error {
+	return m.SetClearBits(w.Addr, w.Set, w.Clear)
+}
+
+// ApplyAll performs a sequence of planned Writes in order, stopping
+// at the first error.
+func (m *Mem) ApplyAll(ws []Write) error {
+	for _, w := range ws {
+		if err := m.Apply(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}

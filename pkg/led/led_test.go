@@ -116,3 +116,84 @@ func TestSet_InvalidZoneOnEX2(t *testing.T) {
 		t.Fatalf("Set(HD3, ...) unexpectedly failed: %v", err)
 	}
 }
+
+// Plan is the pure half Set uses internally, and what the CLI's
+// -n/--dry-run and -D/--debug call directly (so they never touch
+// /dev/mem at all). Pin its output against the same expectations
+// TestSet_PowerLED/TestSet_HDBayLED already check end-to-end, and
+// confirm Set(mem, ...) == mem.ApplyAll(Plan(...)) by construction.
+func TestPlan_MatchesSetBehavior(t *testing.T) {
+	type call struct {
+		zone  Zone
+		color Color
+		state State
+	}
+	calls := []call{
+		{Power, Blue, On},
+		{Power, Blue, Blinking},
+		{Power, Red, On},
+		{Power, Red, Off},
+		{HD0, Red, On},
+		{HD3, Red, Blinking},
+	}
+
+	for _, c := range calls {
+		planMem := fakeregio.New(t)
+		ws, err := Plan(c.zone, c.color, c.state)
+		if err != nil {
+			t.Fatalf("Plan(%v,%v,%v): %v", c.zone, c.color, c.state, err)
+		}
+		if err := planMem.ApplyAll(ws); err != nil {
+			t.Fatalf("ApplyAll(Plan(%v,%v,%v)): %v", c.zone, c.color, c.state, err)
+		}
+
+		setMem := fakeregio.New(t)
+		if err := Set(setMem, c.zone, c.color, c.state); err != nil {
+			t.Fatalf("Set(%v,%v,%v): %v", c.zone, c.color, c.state, err)
+		}
+
+		for _, addr := range []int64{powerDataOut, powerBlinkEn, hdBayDataOut, hdBayBlinkEn} {
+			a := mustRead(t, planMem, addr)
+			b := mustRead(t, setMem, addr)
+			if a != b {
+				t.Errorf("%v,%v,%v: Plan+ApplyAll(0x%x)=0x%x, Set(0x%x)=0x%x differ", c.zone, c.color, c.state, addr, a, addr, b)
+			}
+		}
+	}
+}
+
+func TestPlan_RejectsBadInput(t *testing.T) {
+	if _, err := Plan(Power, Color(99), On); err == nil {
+		t.Error("Plan with invalid color: want error, got nil")
+	}
+	if _, err := Plan(HD0, Red, State(99)); err == nil {
+		t.Error("Plan with invalid state: want error, got nil")
+	}
+	if _, err := Plan(Zone(99), Red, On); err == nil {
+		t.Error("Plan with invalid zone: want error, got nil")
+	}
+}
+
+func TestZoneColorStateStringers(t *testing.T) {
+	// Exercised by the CLI's -D/--debug output - a stringer that
+	// silently falls back to "unknown" for a valid value would be a
+	// confusing regression, so pin the known-good set explicitly.
+	zones := map[Zone]string{Power: "power", HD0: "hd0", HD1: "hd1", HD2: "hd2", HD3: "hd3"}
+	for z, want := range zones {
+		if got := z.String(); got != want {
+			t.Errorf("Zone(%d).String() = %q, want %q", z, got, want)
+		}
+	}
+	colors := map[Color]string{Red: "red", Blue: "blue"}
+	for c, want := range colors {
+		if got := c.String(); got != want {
+			t.Errorf("Color(%d).String() = %q, want %q", c, got, want)
+		}
+	}
+	states := map[State]string{Off: "off", On: "on", Blinking: "blinking"}
+	for s, want := range states {
+		if got := s.String(); got != want {
+			t.Errorf("State(%d).String() = %q, want %q", s, got, want)
+		}
+	}
+}

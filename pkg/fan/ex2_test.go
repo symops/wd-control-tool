@@ -71,3 +71,62 @@ func TestEX2_Set_RejectsOutOfRange(t *testing.T) {
 		}
 	}
 }
+
+// Ex2FanPlan is the pure half Set uses internally, and what the
+// CLI's -n/--dry-run and -D/--debug call directly (so they never
+// open /dev/mem at all). Confirm every level's plan, applied by hand,
+// produces exactly what Set itself produces.
+func TestEx2FanPlan_MatchesSetForEveryLevel(t *testing.T) {
+	for level := 0; level <= 6; level++ {
+		planMem := fakeregio.New(t)
+		ws, err := Ex2FanPlan(level)
+		if err != nil {
+			t.Fatalf("Ex2FanPlan(%d): %v", level, err)
+		}
+		if err := planMem.ApplyAll(ws); err != nil {
+			t.Fatalf("ApplyAll(Ex2FanPlan(%d)): %v", level, err)
+		}
+
+		setMem := fakeregio.New(t)
+		if err := (EX2{Mem: setMem}).Set(level); err != nil {
+			t.Fatalf("Set(%d): %v", level, err)
+		}
+
+		for _, addr := range []int64{ex2FanReg1, ex2FanReg2} {
+			a, _ := planMem.ReadReg32(addr)
+			b, _ := setMem.ReadReg32(addr)
+			if a != b {
+				t.Errorf("level %d: Plan+ApplyAll(0x%x)=0x%x, Set(0x%x)=0x%x differ", level, addr, a, addr, b)
+			}
+		}
+	}
+}
+
+func TestEx2FanPlan_RejectsOutOfRange(t *testing.T) {
+	for _, bad := range []int{-1, 7, 100} {
+		if _, err := Ex2FanPlan(bad); err == nil {
+			t.Errorf("Ex2FanPlan(%d): want error, got nil", bad)
+		}
+	}
+}
+
+func TestEx2FanPlan_AlwaysClearsFirst(t *testing.T) {
+	// Every level, including 0, must start with the two
+	// Clear_All_Fan_Register writes - confirmed by checking the first
+	// two entries of every plan, not just level 0's.
+	for level := 0; level <= 6; level++ {
+		ws, err := Ex2FanPlan(level)
+		if err != nil {
+			t.Fatalf("Ex2FanPlan(%d): %v", level, err)
+		}
+		if len(ws) < 2 {
+			t.Fatalf("Ex2FanPlan(%d): only %d writes, want at least 2", level, len(ws))
+		}
+		if ws[0].Addr != ex2FanReg1 || ws[0].Clear != ex2FanClearMask1 {
+			t.Errorf("Ex2FanPlan(%d)[0] = %+v, want clear of reg1's mask", level, ws[0])
+		}
+		if ws[1].Addr != ex2FanReg2 || ws[1].Clear != ex2FanClearMask2 {
+			t.Errorf("Ex2FanPlan(%d)[1] = %+v, want clear of reg2's mask", level, ws[1])
+		}
+	}
+}

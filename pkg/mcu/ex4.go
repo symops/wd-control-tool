@@ -22,15 +22,26 @@ type EX4 struct{ p *Port }
 
 func NewEX4(p *Port) *EX4 { return &EX4{p: p} }
 
-// FanLevel sets the fan via the MCU - EX4 has no direct-register fan
-// path at all (unlike EX2, see pkg/fan/ex2.go). Levels: 0 Stop, 1 Low,
+// EX4FanLevelFrame builds the frame for FanLevel's level argument,
+// without sending it - the pure half used by the CLI's -n/--dry-run
+// and -D/--debug (and by FanLevel itself). Levels: 0 Stop, 1 Low,
 // 2 Medium, 3 High, 4 Highest (fan_control -f N's own documented
 // range; confirmed as a straight passthrough, not remapped).
-func (m *EX4) FanLevel(level int) error {
+func EX4FanLevelFrame(level int) ([]byte, error) {
 	if level < 0 || level > 4 {
-		return errUnsupportedFanLevel(level)
+		return nil, errUnsupportedFanLevel(level)
 	}
-	return sendLegacy(m.p, buildValueFrame(ex4FanControl, byte(level)))
+	return buildValueFrame(ex4FanControl, byte(level)), nil
+}
+
+// FanLevel sets the fan via the MCU - EX4 has no direct-register fan
+// path at all (unlike EX2, see pkg/fan/ex2.go).
+func (m *EX4) FanLevel(level int) error {
+	f, err := EX4FanLevelFrame(level)
+	if err != nil {
+		return err
+	}
+	return sendLegacy(m.p, f)
 }
 
 func (m *EX4) DeviceReady() error {
@@ -45,16 +56,29 @@ func (m *EX4) RequestDateAndTime() error {
 	return sendLegacy(m.p, buildFixedFrame(ex4RDateAndTime))
 }
 
-// SetDateAndTime writes the RTC. year is the full year (e.g. 2026);
-// only the low 2 digits travel on the wire (BCD).
-func (m *EX4) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
-	return sendLegacy(m.p, buildDateTimeFrame(ex4WDateAndTime, year, mon, dom, dow, hour, min, sec))
+// EX4DateTimeFrame builds WDateAndTime's frame without sending it -
+// see buildDateTimeFrame's doc comment for the wire layout. year is
+// the full year (e.g. 2026); only the low 2 digits travel on the wire
+// (BCD).
+func EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec int) []byte {
+	return buildDateTimeFrame(ex4WDateAndTime, year, mon, dom, dow, hour, min, sec)
 }
 
-// Display writes text to the front-panel LCD. The protocol does not
-// truncate or wrap - see buildTextFrame's doc comment.
+// SetDateAndTime writes the RTC.
+func (m *EX4) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
+	return sendLegacy(m.p, EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec))
+}
+
+// EX4DisplayFrame builds SysName's frame without sending it. The
+// protocol does not truncate or wrap - see buildTextFrame's doc
+// comment.
+func EX4DisplayFrame(text string) []byte {
+	return buildTextFrame(ex4SysName, text)
+}
+
+// Display writes text to the front-panel LCD.
 func (m *EX4) Display(text string) error {
-	return sendLegacy(m.p, buildTextFrame(ex4SysName, text))
+	return sendLegacy(m.p, EX4DisplayFrame(text))
 }
 
 // Shutdown/Reset take a runtime value byte - MCUReset in particular
