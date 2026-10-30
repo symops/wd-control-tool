@@ -1,0 +1,6 @@
+/wd-control-tool
+/wd-control-tool-armv5
+/wd-control-tool-armv7
+/dist/
+*.img
+*.test
