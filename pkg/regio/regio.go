@@ -36,6 +36,16 @@ func Open() (*Mem, error) {
 	return &Mem{f: f}, nil
 }
 
+// OpenFile wraps an already-open file as a Mem without requiring it
+// to be /dev/mem - used by test/fakeregio so tests can exercise this
+// exact mmap-based read/modify/write code against a sparse regular
+// file standing in for physical memory (see test/fakeregio's doc
+// comment for why a regular file works at all), and generally useful
+// for pointing this tool at a saved memory-dump file for offline
+// inspection (the same reasoning verona-tool documents for accepting
+// a plain file in place of a block device).
+func OpenFile(f *os.File) *Mem { return &Mem{f: f} }
+
 func (m *Mem) Close() error { return m.f.Close() }
 
 func pageAlign(addr int64, pageSize int64) (base int64, off int64) {

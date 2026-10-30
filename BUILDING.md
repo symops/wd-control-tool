@@ -55,12 +55,31 @@ arm-linux-gnueabihf-readelf -d wd-control-tool-armv7 | grep NEEDED   # expect: o
 make test    # go vet + go test ./...
 ```
 
-Current coverage is golden-byte unit tests for the frame-encoding
-functions (`pkg/mcu/*_test.go`), checked against the worked examples
-in `SPEC.md`. A no-hardware autotest harness (fake MCU over a PTY
-pair, fake `/dev/mem`-backed register file) is planned but not yet
-built - see the project's task tracker, not this file, for that
-status.
+Coverage, all without root or real hardware:
+
+- Golden-byte unit tests for the frame-encoding functions
+  (`pkg/mcu/*_test.go`), checked against the worked examples in
+  `SPEC.md`.
+- End-to-end transmit tests over a real Linux pty pair
+  (`test/fakemcu`, used from `pkg/mcu/integration_test.go` and
+  `pkg/fan/ex2u_test.go`): the tool's actual `Port.sendBytes` write
+  loop and inter-byte pacing run unmodified, with the test reading
+  back exactly what crossed the "wire". This is also what caught a
+  real bug while writing it: an unconfigured pty slave defaults to
+  cooked-mode line discipline, so any frame byte that happens to
+  equal `\n` (0x0A) - which `SysName`'s own length byte does whenever
+  the text is exactly 10 characters - got silently expanded to
+  `\r\n`. Fixed by putting the slave in raw mode in `test/fakemcu`,
+  matching what `mcu.Open` always does for a real UART.
+- Register read/modify/write tests against a sparse temp file
+  standing in for `/dev/mem` (`test/fakeregio`, used from
+  `pkg/led/led_test.go` and `pkg/fan/ex2_test.go`): `pkg/regio`'s real
+  mmap-based code runs unmodified against the fake backing file.
+
+Run `go test -race ./...` after touching any of the above - the pty
+tests use goroutines (the command runs concurrently with the test
+reading the "wire"), so a race there would be a real concurrency bug,
+not a test artifact.
 
 ## What this does NOT cover
 
