@@ -490,6 +490,15 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 
 	switch b {
 	case board.EX4:
+		// now is captured ONCE and reused by apply below - not
+		// recomputed via a second time.Now() call at send time. The
+		// describe/-D output above promises "the exact frame bytes
+		// that would go out the UART" (see README); a second,
+		// independent time.Now() inside apply would make the ACTUAL
+		// frame sent on a real run differ from the one just shown
+		// (different BCD seconds/minutes, possibly more under the
+		// pacing delay of any action chained before this one),
+		// quietly breaking that promise.
 		now := time.Now()
 		year, mon, dom := now.Date()
 		dow := int(now.Weekday())
@@ -504,7 +513,7 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 					return err
 				}
 				defer p.Close()
-				return rtc.EX4Writer{MCU: mcu.NewEX4(p)}.Set(time.Now())
+				return rtc.EX4Writer{MCU: mcu.NewEX4(p)}.Set(now)
 			},
 		}, exitOK
 	case board.EX2:

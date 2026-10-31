@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/symops/wd-control-tool/pkg/board"
+	"github.com/symops/wd-control-tool/test/fakemcu"
 )
 
 // captureRun runs run(args) with os.Stdout/os.Stderr redirected to
@@ -347,6 +350,51 @@ func TestRun_RTCUnsupportedOnEX2U(t *testing.T) {
 	code, _, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-r", "write"})
 	if code != exitUnsupported {
 		t.Errorf("code=%d, want %d", code, exitUnsupported)
+	}
+}
+
+// Regression test: buildRTCAction used to capture `now` once for the
+// -D debug preview but call time.Now() a SECOND time inside apply()
+// for the actual write - so a real run's frame could carry different
+// BCD seconds/minutes than what -D had just printed, breaking -D's
+// own documented promise ("the exact frame bytes that would go out
+// the UART"). Run a REAL (non-dry-run) rtc write against a fake MCU
+// with -D on, and assert the bytes actually sent over the wire are
+// byte-for-byte identical to the "frame=..." debug line printed for
+// that exact same action - not just "close enough" modulo a clock
+// tick, which a timing-based assertion could flakily let slide.
+func TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	code, out, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-D", "-r", "write"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	const marker = "frame="
+	idx := strings.Index(out, marker)
+	if idx == -1 {
+		t.Fatalf("out=%q, want a debug line with %q", out, marker)
+	}
+	hexPart := out[idx+len(marker):]
+	if nl := strings.IndexByte(hexPart, '\n'); nl != -1 {
+		hexPart = hexPart[:nl]
+	}
+	var wantFrame []byte
+	for _, tok := range strings.Fields(hexPart) {
+		b, err := strconv.ParseUint(tok, 16, 8)
+		if err != nil {
+			t.Fatalf("parsing debug frame byte %q (from %q): %v", tok, hexPart, err)
+		}
+		wantFrame = append(wantFrame, byte(b))
+	}
+	if len(wantFrame) != 13 {
+		t.Fatalf("parsed debug frame = % X (%d bytes), want 13 (WDateAndTime's fixed frame size)", wantFrame, len(wantFrame))
+	}
+
+	gotFrame := fake.ReadFrame(t, 13, 2*time.Second)
+	if !bytes.Equal(gotFrame, wantFrame) {
+		t.Errorf("actual wire frame = % X, want exactly the debug-printed frame % X (apply() must reuse the same timestamp debug used, not call time.Now() again)", gotFrame, wantFrame)
 	}
 }
 
