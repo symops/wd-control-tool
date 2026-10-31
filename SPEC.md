@@ -124,19 +124,39 @@ are described in full; see "Full command tables" for every row):
   dispatch group number (2), but EX2's handler was not independently
   decompiled and its write-side byte layout is **not confirmed** (see
   "Unresolved"). Do not assume it matches EX4's.
+
+  The BCD formula above is `((v/10)<<4)|(v%10)` for `v` already known
+  to be in its field's valid range (confirmed empirically, not just by
+  reading the formula: a negative `v` can produce a byte equal to this
+  protocol's own `0xFA`/`0xFB` markers - e.g. `v=-5` -> `0xFB`, `v=-6`
+  -> `0xFA` - corrupting the frame). `wd-control-tool`'s
+  `EX4DateTimeFrame` validates every field (year >= 0, month 1-12, day
+  1-31, weekday 0-6, hour 0-23, minute/second 0-59) before it ever
+  reaches the BCD step, for exactly this reason.
 - **group 2, `WMAlarmDateAndTime` (EX4 only)**: `FA b4 b5 b6 b7 <5 BCD
   fields: mon,dom,hour,min,sec> FB` (11 bytes).
 - **group 9 (`SysName`, EX4 only)**: `FA b4 b5 b6 LEN <text, raw
   ASCII, LEN bytes, no NUL> FB`. **The protocol does not truncate or
-  paginate** - the 16-char, `>`-terminated strings seen in the vendor
-  `/init` script were manually pre-truncated by whoever wrote that
-  script, not enforced by this layer. How an over-length payload
-  behaves on real LCD firmware is untested.
+  paginate at 16 characters** - the 16-char, `>`-terminated strings
+  seen in the vendor `/init` script were manually pre-truncated by
+  whoever wrote that script, not enforced by this layer. How an
+  over-length payload behaves on real LCD firmware is untested. The
+  wire format itself DOES impose a hard ceiling of 255 bytes, though,
+  simply because LEN is one byte wide - `wd-control-tool`'s own
+  `EX4DisplayFrame` rejects text over 255 bytes with an error rather
+  than what an earlier version of it did: silently compute
+  `byte(len(text))`, which wraps to 0 for exactly 256 bytes, producing
+  a frame that lies about its own payload length (see git history for
+  the fix - this is the kind of implementation bug this spec can't
+  capture by describing the wire format alone).
 - **group 8 (`DeviceShutdown`/`MCUReset`/`DeviceShutdownByUPS`)**: `FA
   b4 b5 b6 b7 VALUE FB` - the final byte is a **runtime** value, not a
   table constant. `MCUReset` in particular requires a numeric argument
   on the real tool (`up_send_ctl MCUReset <code>`); the meaning of
-  `<code>` was not decoded.
+  `<code>` was not decoded, so `wd-control-tool` cannot validate its
+  real range - it only rejects `VALUE` being exactly `0xFA`/`0xFB`
+  (the frame's own start/end markers), since that would corrupt the
+  frame structure regardless of what the code means semantically.
 
 ### Full command tables
 
