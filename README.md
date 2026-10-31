@@ -79,7 +79,7 @@ fails stops the rest - later actions in the same command never run.
 | `-f`, `--fan` | all | `LEVEL` | Board-native units, NOT a common 0-100 scale: EX2U 0/25/50/75/100 (duty %), EX4 0-4 (Stop..Highest), EX2 0-6 (Stop + 6 fixed RPM steps). See SPEC.md, "Fan control". |
 | `-l`, `--led` | ex2, ex4 | `ZONE COLOR STATE` | zones: `power`, `hd0`, `hd1` (+`hd2`,`hd3` on EX4); colors: `red`, `blue`; states: `on`, `off`, `blinking`. |
 | `-l`, `--led` | ex2u | `STATE` | states: `on`, `off`, `blinking`, `breathing` - EX2U's single status LED, not a zone/color scheme. |
-| `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated/wrapped by this tool or the protocol - see SPEC.md. Taken verbatim, even if it looks like a flag (e.g. starts with `-`). |
+| `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated or paginated at the LCD's own 16-char width - see SPEC.md. Taken verbatim, even if it looks like a flag (e.g. starts with `-`). Max 255 bytes (the wire format's own LEN field is one byte wide); longer text is rejected with an error, not silently cut or wrapped. |
 | `-r`, `--rtc` | ex4 | `write` | Pushes the host's current time to the MCU RTC. **EX2 not yet implemented** (frame layout unconfirmed); **no board supports reading the RTC back** yet (see SPEC.md). |
 
 No generic "all boards" fallback exists anywhere: every command's
