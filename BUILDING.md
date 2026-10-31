@@ -54,6 +54,7 @@ arm-linux-gnueabihf-readelf -d wd-control-tool-armv7 | grep NEEDED   # expect: o
 ```sh
 make test        # go vet + go test ./...
 make test-race   # go vet + go test -race ./... - run before every push, not just this
+make fuzz        # actually fuzz (not just the seed corpus `test` runs) - 30s per target by default, `make fuzz FUZZTIME=5m` for longer
 ```
 
 Coverage, all without root or real hardware:
@@ -106,6 +107,20 @@ Coverage, all without root or real hardware:
   and `parseArgs()` directly, with stdout/stderr captured via
   `os.Pipe`. This caught a third real bug: `-h`/`--help` was writing
   its usage text to stderr instead of stdout.
+- A handful of frame-corruption bugs (toBCD/`EX4DateTimeFrame`,
+  `shutdownFamily`, `EX4DisplayFrame`'s LEN byte - see git history)
+  all came from the same root cause: a value landing directly in a
+  wire frame without being checked against the frame's own FA/FB
+  markers. Two native Go fuzz tests (`make fuzz`) formalize the
+  properties fixed by hand for specific boundary cases -
+  `FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload` in
+  `pkg/mcu/legacy_test.go` and `FuzzParseArgs_NeverPanics` in
+  `cmd/wd-control-tool/main_test.go` - and have each run clean for
+  millions of executions.
+- End-to-end tests (`cmd/wd-control-tool/e2e_test.go`) build the real
+  binary once and exec it for a few cases, closing the one remaining
+  gap everything else leaves: `main()`'s own `os.Exit(run(...))` and
+  the real process boundary (actual argv, actual process exit code).
 
 Run `make test-race` after touching any of the above - the pty tests
 use goroutines (the command runs concurrently with the test reading

@@ -9,7 +9,7 @@ PKG     := ./cmd/wd-control-tool
 # touching these flags.
 LDFLAGS := -s -w -linkmode=external
 
-.PHONY: build-ex2u build-ex4 build-ex2 strip verify-deps build-host test test-race clean
+.PHONY: build-ex2u build-ex4 build-ex2 strip verify-deps build-host test test-race fuzz clean
 
 # EX2U (and, once its uRamdisk is rebuilt, EX2): Armada 385/370,
 # armv7, hard-float ABI (confirmed: ld-linux-armhf.so.3).
@@ -72,6 +72,18 @@ test:
 test-race:
 	go vet ./...
 	go test -race $(TESTFLAGS) ./...
+
+
+# Go can only fuzz one target per process, so this runs each
+# Fuzz* function in this project for FUZZTIME apiece (default 30s;
+# override with `make fuzz FUZZTIME=5m`). A plain `go test` (the
+# `test`/`test-race` targets) always runs these too, but only against
+# their small seed corpus - this is the opt-in, exploratory version.
+FUZZTIME := 30s
+
+fuzz:
+	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
+	go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzParseArgs_NeverPanics -fuzztime=$(FUZZTIME)
 
 clean:
 	rm -f $(BINARY) $(BINARY)-armv7 $(BINARY)-armv5
