@@ -150,6 +150,26 @@ use goroutines (the command runs concurrently with the test reading
 the "wire"), so a race there would be a real concurrency bug, not a
 test artifact.
 
+Two logical (not memory-access) concurrency bugs were found this way
+- `go test -race` alone wouldn't have caught either, since each
+individual operation involved was still correctly mutex-protected in
+isolation:
+- `mcu.Port.sendBytes` held its lock per byte, not per frame, so two
+  goroutines sending frames on the same Port could interleave their
+  bytes on the wire. Fixed by holding the lock for the whole frame
+  (`pkg/mcu/serial_test.go`'s
+  `TestPort_SendBytes_ConcurrentFramesNeverInterleave`).
+- `regio.Mem.SetClearBits` called the exported `ReadReg32` then
+  `WriteReg32`, each independently taking and releasing the lock, so
+  two concurrent `SetClearBits` calls on the same address could both
+  read the same starting value before either wrote back - a classic
+  read-modify-write lost update. Confirmed reliably reproducible (not
+  just theoretical): `pkg/regio/regio_test.go`'s
+  `TestMem_SetClearBits_ConcurrentDistinctBitsAllSurvive` (32
+  goroutines each setting one distinct bit, no artificial delay)
+  failed every single run against the old code. Fixed by holding the
+  lock across both the read and the write.
+
 No automated test opens a real `/dev/mem` (only the sparse-file
 stand-in) or sends traffic over a real UART to actual hardware - by
 design, this suite proves the tool's own logic (frame bytes, register
