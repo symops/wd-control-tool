@@ -23,8 +23,9 @@ import (
 
 // Fake is one open pty pair.
 type Fake struct {
-	Master *os.File
-	Slave  *os.File
+	Master    *os.File
+	Slave     *os.File
+	SlavePath string // lets a test call mcu.Open(SlavePath, baud) itself, exercising the real Open path (termios setup included) instead of mcu.OpenFile(Slave)
 }
 
 // setRaw strips the line discipline's cooked-mode processing
@@ -92,7 +93,7 @@ func New(t *testing.T) *Fake {
 		t.Fatalf("fakemcu: set slave raw mode: %v", err)
 	}
 
-	f := &Fake{Master: master, Slave: slave}
+	f := &Fake{Master: master, Slave: slave, SlavePath: slavePath}
 	t.Cleanup(func() {
 		slave.Close()
 		master.Close()

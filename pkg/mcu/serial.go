@@ -78,16 +78,3 @@ func (p *Port) sendBytes(b []byte, pace func()) error {
 	}
 	return nil
 }
-
-// readByte reads exactly one byte (blocking, VMIN=1).
-func (p *Port) readByte() (byte, error) {
-	var buf [1]byte
-	n, err := p.f.Read(buf[:])
-	if err != nil {
-		return 0, err
-	}
-	if n != 1 {
-		return 0, fmt.Errorf("mcu: short read")
-	}
-	return buf[0], nil
-}

@@ -1,0 +1,65 @@
+package rtc
+
+import (
+	"bytes"
+	"testing"
+	"time"
+
+	"github.com/symops/wd-control-tool/pkg/mcu"
+	"github.com/symops/wd-control-tool/test/fakemcu"
+)
+
+func TestEX4Writer_Set(t *testing.T) {
+	fake := fakemcu.New(t)
+	w := EX4Writer{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
+
+	// 2026-11-01 is a Sunday (2026-10-31, used elsewhere in this
+	// project's tests/SPEC.md, is a Saturday) - time.Weekday's
+	// encoding (0=Sunday) is used directly as the wire's dow field,
+	// so this also pins that no remapping is needed/happening.
+	when := time.Date(2026, time.November, 1, 10, 20, 30, 0, time.UTC)
+
+	done := make(chan error, 1)
+	go func() { done <- w.Set(when) }()
+
+	got := fake.ReadFrame(t, 13, 3*time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	want := mcu.EX4DateTimeFrame(2026, 11, 1, 0, 10, 20, 30)
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}
+
+func TestEX4Writer_Set_WeekdayEncoding(t *testing.T) {
+	// Confirm every day of one week maps dow 0..6 Sun..Sat, matching
+	// Go's own time.Weekday numbering, with no off-by-one.
+	base := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC) // Sunday
+	for i := 0; i < 7; i++ {
+		day := base.AddDate(0, 0, i)
+		fake := fakemcu.New(t)
+		w := EX4Writer{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
+
+		done := make(chan error, 1)
+		go func() { done <- w.Set(day) }()
+
+		got := fake.ReadFrame(t, 13, 3*time.Second)
+		if err := <-done; err != nil {
+			t.Fatalf("day %d: Set: %v", i, err)
+		}
+		if int(got[8]) != i {
+			t.Errorf("day %d (%v): dow byte = %d, want %d", i, day.Weekday(), got[8], i)
+		}
+	}
+}
+
+func TestErrEX2NotImplemented(t *testing.T) {
+	if ErrEX2NotImplemented == nil {
+		t.Fatal("ErrEX2NotImplemented is nil")
+	}
+	if ErrEX2NotImplemented.Error() == "" {
+		t.Error("ErrEX2NotImplemented has an empty message")
+	}
+}

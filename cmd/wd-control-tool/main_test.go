@@ -65,37 +65,90 @@ func TestRun_HelpAndVersionMustBeAlone(t *testing.T) {
 	}
 }
 
-func TestRun_RequiresBoardAndMode(t *testing.T) {
-	if code, _, errOut := captureRun(t, []string{"-f", "-c", "50"}); code != exitUsage || !strings.Contains(errOut, "-b/--board") {
+func TestRun_RequiresBoardAndAction(t *testing.T) {
+	if code, _, errOut := captureRun(t, []string{"-f", "50"}); code != exitUsage || !strings.Contains(errOut, "-b/--board") {
 		t.Errorf("no -b: code=%d err=%q", code, errOut)
 	}
-	if code, _, errOut := captureRun(t, []string{"-b", "ex4", "-c", "50"}); code != exitUsage || !strings.Contains(errOut, "-l/--led") {
-		t.Errorf("no mode: code=%d err=%q", code, errOut)
+	if code, _, errOut := captureRun(t, []string{"-b", "ex4"}); code != exitUsage || !strings.Contains(errOut, "-l/--led") {
+		t.Errorf("no action: code=%d err=%q", code, errOut)
 	}
-	if code, _, errOut := captureRun(t, []string{"-b", "ex4", "-f"}); code != exitUsage || !strings.Contains(errOut, "-c/--command") {
-		t.Errorf("no -c: code=%d err=%q", code, errOut)
-	}
-	if code, _, errOut := captureRun(t, []string{"-b", "nosuchboard", "-f", "-c", "50"}); code != exitUsage || !strings.Contains(errOut, "unknown board") {
+	if code, _, errOut := captureRun(t, []string{"-b", "nosuchboard", "-f", "50"}); code != exitUsage || !strings.Contains(errOut, "unknown board") {
 		t.Errorf("bad board: code=%d err=%q", code, errOut)
-	}
-	if code, _, errOut := captureRun(t, []string{"-b", "ex4", "-f", "-l", "-c", "50"}); code != exitUsage || !strings.Contains(errOut, "only one of") {
-		t.Errorf("two modes: code=%d err=%q", code, errOut)
 	}
 }
 
-func TestRun_CommandMustBeLast(t *testing.T) {
-	// -n/-D placed AFTER -c are swallowed as the command's own
-	// arguments, not parsed as flags - this is documented behavior
-	// (see printUsage), not a bug; pin it so a future refactor can't
-	// silently change the ordering rule without a test noticing.
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "-c", "50", "-n"})
-	if code != exitUsage || !strings.Contains(errOut, "usage: -b BOARD -f -c LEVEL") {
-		t.Errorf("-n after -c: code=%d err=%q, want a wrong-arg-count usage error", code, errOut)
+// -b/--board is looked up in a dedicated first pass specifically so
+// its position relative to the mode flags never matters (led's arity
+// depends on the board, which would otherwise make order significant
+// - see TestParseArgs_BoardAnywhereBeforeModeFlags). Confirm that
+// holds end-to-end through run(), not just at the parseArgs level.
+func TestRun_BoardPositionDoesNotMatter(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-f", "3", "-b", "ex2", "-n"})
+	if code != exitOK {
+		t.Errorf("code=%d out=%q, want success even with -b after -f", code, out)
+	}
+	if !strings.Contains(out, "level 3") {
+		t.Errorf("out=%q, want the fan action to have been parsed correctly", out)
+	}
+}
+
+// Omitting -b/--board entirely, with a mode flag present, must still
+// be a usage error (there is nothing to resolve led's arity against,
+// and no board to act on regardless).
+func TestRun_MissingBoardEntirely(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-f", "3"})
+	if code != exitUsage || !strings.Contains(errOut, "-b/--board is required") {
+		t.Errorf("code=%d err=%q", code, errOut)
+	}
+}
+
+func TestRun_MultipleActionsRunInOrder(t *testing.T) {
+	// The exact example from the user's own request.
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-D", "--led", "power", "blue", "on", "-f", "1"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	ledIdx := strings.Index(out, "power")
+	fanIdx := strings.Index(out, "level 1")
+	if ledIdx == -1 || fanIdx == -1 || ledIdx > fanIdx {
+		t.Errorf("out=%q, want the led action described before the fan action", out)
+	}
+}
+
+func TestRun_MultipleActions_FailFastOnRealRun(t *testing.T) {
+	// Without -n: an invalid first action must stop the whole command
+	// before a second (otherwise-valid) action ever runs. Point both
+	// actions' serial traffic (fan on ex2u) and (display on ex4 -
+	// not reached) is awkward to arrange on one board, so instead use
+	// two fan actions on ex2u where the first is invalid and the
+	// second is valid; if fail-fast works, the valid one's frame
+	// bytes never appear anywhere because it never got dispatched (we
+	// can't observe "didn't run" directly without touching hardware,
+	// so this test instead checks the exit code and error message
+	// come from the FIRST action, not generic/from the second).
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "42", "-f", "50"})
+	if code != exitUsage {
+		t.Errorf("code=%d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(errOut, "unsupported fan level 42") {
+		t.Errorf("errOut=%q, want it to mention the FIRST (invalid) action's level 42, not the second", errOut)
+	}
+}
+
+func TestRun_RepeatedModeFlagAllowed(t *testing.T) {
+	// Chaining the same mode twice is allowed (e.g. two fan levels in
+	// sequence) - nothing in the new grammar needs to forbid it.
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "25", "-f", "75"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "25%") || !strings.Contains(out, "75%") {
+		t.Errorf("out=%q, want both fan levels described", out)
 	}
 }
 
 func TestRun_DryRun_EX2UFan(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-f", "-n", "-D", "-c", "50"})
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-f", "50"})
 	if code != exitOK {
 		t.Fatalf("code=%d", code)
 	}
@@ -108,7 +161,7 @@ func TestRun_DryRun_EX2UFan(t *testing.T) {
 }
 
 func TestRun_DryRun_EX2UFan_InvalidLevelExitsZero(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-f", "-n", "-c", "42"})
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "42"})
 	if code != exitOK {
 		t.Errorf("code=%d, want 0 (dry-run must exit 0 even when the real run would fail)", code)
 	}
@@ -118,7 +171,7 @@ func TestRun_DryRun_EX2UFan_InvalidLevelExitsZero(t *testing.T) {
 }
 
 func TestRun_RealRun_EX2UFan_InvalidLevelExitsUsage(t *testing.T) {
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "-c", "42"})
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "42"})
 	if code != exitUsage {
 		t.Errorf("code=%d, want %d (invalid level without -n)", code, exitUsage)
 	}
@@ -128,7 +181,7 @@ func TestRun_RealRun_EX2UFan_InvalidLevelExitsUsage(t *testing.T) {
 }
 
 func TestRun_DryRun_EX4Led(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex4", "--led", "-n", "-D", "-c", "power", "blue", "on"})
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "--led", "power", "blue", "on"})
 	if code != exitOK {
 		t.Fatalf("code=%d, out=%q", code, out)
 	}
@@ -143,7 +196,7 @@ func TestRun_DryRun_EX4Led(t *testing.T) {
 }
 
 func TestRun_DryRun_EX4Display(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex4", "-d", "-n", "-D", "-c", "Booting..."})
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-d", "Booting..."})
 	if code != exitOK {
 		t.Fatalf("code=%d", code)
 	}
@@ -152,9 +205,22 @@ func TestRun_DryRun_EX4Display(t *testing.T) {
 	}
 }
 
+// A display text that itself looks like a flag must still be taken
+// verbatim as the TEXT argument - this is the whole point of fixed
+// arity over a "-c ... take the rest" delimiter.
+func TestRun_DisplayTextLookingLikeAFlag(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-d", "-not-a-flag"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, `"-not-a-flag"`) {
+		t.Errorf("out=%q, want the literal text in the description", out)
+	}
+}
+
 func TestRun_DisplayUnsupportedOnEX2AndEX2U(t *testing.T) {
 	for _, b := range []string{"ex2", "ex2u"} {
-		code, _, errOut := captureRun(t, []string{"-b", b, "-d", "-n", "-c", "hi"})
+		code, _, errOut := captureRun(t, []string{"-b", b, "-n", "-d", "hi"})
 		if code != exitUnsupported {
 			t.Errorf("board %s: code=%d, want %d", b, code, exitUnsupported)
 		}
@@ -165,7 +231,7 @@ func TestRun_DisplayUnsupportedOnEX2AndEX2U(t *testing.T) {
 }
 
 func TestRun_RTCWriteUnimplementedOnEX2(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex2", "-r", "-n", "-c", "write"})
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-r", "write"})
 	if code != exitOK {
 		t.Errorf("code=%d, want 0 (dry-run always exits 0 for a 'would fail' case)", code)
 	}
@@ -175,11 +241,10 @@ func TestRun_RTCWriteUnimplementedOnEX2(t *testing.T) {
 }
 
 func TestRun_RTCUnsupportedOnEX2U(t *testing.T) {
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-r", "-n", "-c", "write"})
+	code, _, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-r", "write"})
 	if code != exitUnsupported {
 		t.Errorf("code=%d, want %d", code, exitUnsupported)
 	}
-	_ = errOut
 }
 
 func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
@@ -188,9 +253,9 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	// exitHardwareIO path without hardware.
 	bad := "/nonexistent/wd-control-tool-test-path"
 	cases := [][]string{
-		{"-b", "ex2u", "-f", "--serial", bad, "-c", "50"},
-		{"-b", "ex4", "-d", "--serial", bad, "-c", "hi"},
-		{"-b", "ex4", "-r", "--serial", bad, "-c", "write"},
+		{"-b", "ex2u", "--serial", bad, "-f", "50"},
+		{"-b", "ex4", "--serial", bad, "-d", "hi"},
+		{"-b", "ex4", "--serial", bad, "-r", "write"},
 	}
 	for _, args := range cases {
 		code, _, errOut := captureRun(t, args)
@@ -203,46 +268,58 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 func TestRun_LEDZoneValidationPerBoard(t *testing.T) {
 	// hd2/hd3 don't exist on EX2 - this must be caught before any
 	// hardware is touched (dry-run exits 0 reporting "would fail").
-	code, out, _ := captureRun(t, []string{"-b", "ex2", "-l", "-n", "-c", "hd2", "red", "on"})
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-l", "hd2", "red", "on"})
 	if code != exitOK || !strings.Contains(out, "would fail") {
 		t.Errorf("ex2 hd2: code=%d out=%q", code, out)
 	}
 	// Same zone is fine on EX4.
-	code, out, _ = captureRun(t, []string{"-b", "ex4", "-l", "-n", "-c", "hd2", "red", "on"})
+	code, out, _ = captureRun(t, []string{"-b", "ex4", "-n", "-l", "hd2", "red", "on"})
 	if code != exitOK || !strings.Contains(out, "would") || strings.Contains(out, "would fail") {
 		t.Errorf("ex4 hd2: code=%d out=%q", code, out)
 	}
 }
 
 func TestParseArgs_AttachedLongForms(t *testing.T) {
-	opts, err := parseArgs([]string{"--board=ex4", "--serial=/dev/ttyS2", "-f", "-c", "2"})
+	opts, err := parseArgs([]string{"--board=ex4", "--serial=/dev/ttyS2", "-f", "2"})
 	if err != nil {
 		t.Fatalf("parseArgs: %v", err)
 	}
-	if opts.board != "ex4" || opts.serial != "/dev/ttyS2" || opts.mode != "fan" || !opts.commandGiven {
+	if opts.board != "ex4" || opts.serial != "/dev/ttyS2" {
 		t.Errorf("opts = %+v", opts)
 	}
-	if len(opts.cmdArgs) != 1 || opts.cmdArgs[0] != "2" {
-		t.Errorf("cmdArgs = %v", opts.cmdArgs)
+	if len(opts.actions) != 1 || opts.actions[0].mode != "fan" || len(opts.actions[0].args) != 1 || opts.actions[0].args[0] != "2" {
+		t.Errorf("actions = %+v", opts.actions)
 	}
 }
 
-func TestParseArgs_FlagOrderBeforeCIsFree(t *testing.T) {
-	a, err := parseArgs([]string{"-D", "-f", "-b", "ex4", "-n", "-c", "2"})
+func TestParseArgs_BoardAnywhereBeforeModeFlags(t *testing.T) {
+	a, err := parseArgs([]string{"-D", "-b", "ex4", "-n", "-f", "2"})
 	if err != nil {
 		t.Fatalf("parseArgs: %v", err)
 	}
-	b, err := parseArgs([]string{"-b", "ex4", "-n", "-D", "-f", "-c", "2"})
+	b, err := parseArgs([]string{"-b", "ex4", "-n", "-D", "-f", "2"})
 	if err != nil {
 		t.Fatalf("parseArgs: %v", err)
 	}
-	if a.board != b.board || a.mode != b.mode || a.dryRun != b.dryRun || a.debug != b.debug {
-		t.Errorf("flag order before -c should not matter: a=%+v b=%+v", a, b)
+	if a.board != b.board || a.dryRun != b.dryRun || a.debug != b.debug || len(a.actions) != len(b.actions) {
+		t.Errorf("flag order before the mode flag should not matter: a=%+v b=%+v", a, b)
+	}
+}
+
+func TestParseArgs_ModifiersAfterAction(t *testing.T) {
+	// Unlike the old -c-delimited grammar, -n/-D are ordinary flags
+	// now and may appear AFTER an action's fixed-arity arguments too.
+	opts, err := parseArgs([]string{"-b", "ex4", "-f", "2", "-n", "-D"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if !opts.dryRun || !opts.debug {
+		t.Errorf("opts = %+v, want dryRun and debug both true", opts)
 	}
 }
 
 func TestParseArgs_UnrecognizedFlag(t *testing.T) {
-	if _, err := parseArgs([]string{"-b", "ex4", "-f", "-x", "-c", "2"}); err == nil {
+	if _, err := parseArgs([]string{"-b", "ex4", "-f", "-x", "2"}); err == nil {
 		t.Error("want error for unrecognized flag -x")
 	}
 }
@@ -256,6 +333,24 @@ func TestParseArgs_MissingValueForBoardOrSerial(t *testing.T) {
 	}
 }
 
+func TestParseArgs_LedArityDependsOnBoard(t *testing.T) {
+	a, err := parseArgs([]string{"-b", "ex2u", "-l", "breathing"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if len(a.actions) != 1 || len(a.actions[0].args) != 1 {
+		t.Errorf("ex2u led actions = %+v, want 1 action with 1 arg", a.actions)
+	}
+
+	b, err := parseArgs([]string{"-b", "ex4", "-l", "power", "blue", "on"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if len(b.actions) != 1 || len(b.actions[0].args) != 3 {
+		t.Errorf("ex4 led actions = %+v, want 1 action with 3 args", b.actions)
+	}
+}
+
 func TestRun_EmptyArgs(t *testing.T) {
 	code, _, errOut := captureRun(t, []string{})
 	if code != exitUsage || !strings.Contains(errOut, "-b/--board") {
@@ -263,17 +358,14 @@ func TestRun_EmptyArgs(t *testing.T) {
 	}
 }
 
-// -c with zero arguments following it is distinct from -c never
-// appearing at all (commandGiven=true, cmdArgs=[]string{}) - every
-// mode here needs at least one argument, so this must still be a
-// wrong-arg-count usage error, not silently treated as "-c missing".
-func TestRun_CommandWithZeroTrailingArgs(t *testing.T) {
+func TestRun_ActionMissingTrailingArgs(t *testing.T) {
 	cases := [][]string{
-		{"-b", "ex4", "-f", "-c"},
-		{"-b", "ex4", "-r", "-c"},
-		{"-b", "ex4", "-d", "-c"},
-		{"-b", "ex4", "-l", "-c"},
-		{"-b", "ex2u", "-l", "-c"},
+		{"-b", "ex4", "-f"},
+		{"-b", "ex4", "-r"},
+		{"-b", "ex4", "-d"},
+		{"-b", "ex4", "-l"},
+		{"-b", "ex2u", "-l"},
+		{"-b", "ex4", "-l", "power", "blue"}, // 2 of the 3 needed
 	}
 	for _, args := range cases {
 		code, _, errOut := captureRun(t, args)
@@ -283,26 +375,13 @@ func TestRun_CommandWithZeroTrailingArgs(t *testing.T) {
 	}
 }
 
-func TestRun_LEDWrongArgCountPerBoard(t *testing.T) {
-	// EX2U's led takes exactly 1 argument (a state), not 3.
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-l", "-c", "power", "blue", "on"})
-	if code != exitUsage {
-		t.Errorf("ex2u led with 3 args: code=%d err=%q", code, errOut)
-	}
-	// EX2/EX4's led takes exactly 3 arguments, not 1.
-	code, _, errOut = captureRun(t, []string{"-b", "ex4", "-l", "-c", "breathing"})
-	if code != exitUsage {
-		t.Errorf("ex4 led with 1 arg: code=%d err=%q", code, errOut)
-	}
-}
-
 func TestRun_RTCWrongSubcommand(t *testing.T) {
 	// Only "write" is a recognized rtc subcommand right now (no read
 	// support - see SPEC.md); anything else is a usage error on every
 	// board, dry-run or not, since it's a malformed command, not a
 	// "would fail" semantic case.
 	for _, bad := range []string{"read", "sync", "WRITE", ""} {
-		code, _, errOut := captureRun(t, []string{"-b", "ex4", "-r", "-n", "-c", bad})
+		code, _, errOut := captureRun(t, []string{"-b", "ex4", "-n", "-r", bad})
 		if code != exitUsage {
 			t.Errorf("rtc %q: code=%d err=%q, want %d", bad, code, errOut, exitUsage)
 		}
@@ -310,7 +389,7 @@ func TestRun_RTCWrongSubcommand(t *testing.T) {
 }
 
 func TestRun_FanNonNumericLevel(t *testing.T) {
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "-n", "-c", "fifty"})
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "fifty"})
 	if code != exitUsage {
 		t.Errorf("code=%d, want %d (non-numeric level is a usage error even under -n)", code, exitUsage)
 	}
@@ -326,7 +405,7 @@ func TestRun_FanUnsupportedBoard(t *testing.T) {
 	// board supports fan, and pins buildFanAction's behavior should a
 	// fourth board ever be added without updating it.
 	for _, b := range []string{"ex2u", "ex2", "ex4"} {
-		code, _, errOut := captureRun(t, []string{"-b", b, "-f", "-n", "-c", "0"})
+		code, _, errOut := captureRun(t, []string{"-b", b, "-n", "-f", "0"})
 		if code != exitOK {
 			t.Errorf("board %s fan 0: code=%d err=%q", b, code, errOut)
 		}
@@ -337,7 +416,7 @@ func TestRun_DebugAloneWithoutDryRunStillExecutesDescribeOnly(t *testing.T) {
 	// -D without -n on a "would fail" case must still report the
 	// failure (not silently swallow it because debug lines were
 	// printed first).
-	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "-D", "-c", "42"})
+	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-D", "-f", "42"})
 	if code != exitUsage {
 		t.Errorf("code=%d, want %d", code, exitUsage)
 	}

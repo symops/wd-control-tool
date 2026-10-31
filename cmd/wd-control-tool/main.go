@@ -35,29 +35,90 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// pendingAction is one <mode flag> + its own fixed-arity arguments,
+// in the order it appeared on the command line.
+type pendingAction struct {
+	mode string // "led", "fan", "rtc", "display"
+	args []string
+}
+
 // options is the result of parsing argv - see parseArgs.
 type options struct {
-	board        string
-	mode         string // "led", "fan", "rtc", "display", or "" if none selected
-	modeCount    int
-	commandGiven bool
-	cmdArgs      []string
-	dryRun       bool
-	debug        bool
-	serial       string
-	help         bool
-	version      bool
+	board   string
+	actions []pendingAction
+	dryRun  bool
+	debug   bool
+	serial  string
+	help    bool
+	version bool
+}
+
+func modeNameFor(flag string) string {
+	switch flag {
+	case "-l", "--led":
+		return "led"
+	case "-f", "--fan":
+		return "fan"
+	case "-r", "--rtc":
+		return "rtc"
+	case "-d", "--display":
+		return "display"
+	default:
+		return ""
+	}
+}
+
+// arityFor is how many of the following command-line tokens a mode
+// flag consumes as its own arguments, verbatim, regardless of what
+// they look like (so e.g. a display text starting with "-" is never
+// mistaken for a flag). led's arity depends on the board: EX2U's
+// status LED takes one STATE word, EX2/EX4's zone/color/state scheme
+// takes three.
+func arityFor(mode string, b board.Board) int {
+	switch mode {
+	case "fan", "display", "rtc":
+		return 1
+	case "led":
+		if b == board.EX2U {
+			return 1
+		}
+		return 3
+	default:
+		return 0
+	}
 }
 
 // parseArgs is a small hand-rolled parser, not the stdlib flag
-// package: -c/--command's job is to mark "everything after this is
-// the selected command's own positional argument list", which
-// flag.FlagSet has no way to express (the same reason verona-tool
-// needed its own custom parser for its -k/-t/-f shortcuts - see its
-// SPEC.md). Every other flag may appear in any order before -c;
-// nothing after -c is parsed as a flag at all.
+// package: each mode flag (-l/-f/-r/-d) consumes a fixed number of
+// the following tokens as its own argument list (see arityFor), so
+// several actions can be chained in one invocation and no delimiter
+// flag is needed between a mode flag and its arguments, or between
+// one action and the next. -b/--board is looked up in a first pass
+// (it may appear anywhere) because led's arity depends on it.
 func parseArgs(args []string) (*options, error) {
 	opts := &options{serial: "/dev/ttyS1"}
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-b" || a == "--board" {
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("%s requires a value", a)
+			}
+			opts.board = args[i]
+		} else if strings.HasPrefix(a, "--board=") {
+			opts.board = strings.TrimPrefix(a, "--board=")
+		}
+	}
+
+	var b board.Board
+	if opts.board != "" {
+		parsed, err := board.Parse(opts.board)
+		if err != nil {
+			return nil, err
+		}
+		b = parsed
+	}
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -67,21 +128,9 @@ func parseArgs(args []string) (*options, error) {
 		case a == "-v" || a == "--version":
 			opts.version = true
 		case a == "-b" || a == "--board":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("%s requires a value", a)
-			}
-			opts.board = args[i]
+			i++ // value already captured above
 		case strings.HasPrefix(a, "--board="):
-			opts.board = strings.TrimPrefix(a, "--board=")
-		case a == "-l" || a == "--led":
-			opts.mode, opts.modeCount = "led", opts.modeCount+1
-		case a == "-f" || a == "--fan":
-			opts.mode, opts.modeCount = "fan", opts.modeCount+1
-		case a == "-r" || a == "--rtc":
-			opts.mode, opts.modeCount = "rtc", opts.modeCount+1
-		case a == "-d" || a == "--display":
-			opts.mode, opts.modeCount = "display", opts.modeCount+1
+			// already captured above
 		case a == "-n" || a == "--dry-run":
 			opts.dryRun = true
 		case a == "-D" || a == "--debug":
@@ -94,18 +143,23 @@ func parseArgs(args []string) (*options, error) {
 			opts.serial = args[i]
 		case strings.HasPrefix(a, "--serial="):
 			opts.serial = strings.TrimPrefix(a, "--serial=")
-		case a == "-c" || a == "--command":
-			opts.commandGiven = true
-			opts.cmdArgs = args[i+1:]
-			i = len(args) // nothing after -c/--command is parsed as a flag
+		case modeNameFor(a) != "":
+			if opts.board == "" {
+				return nil, fmt.Errorf("-b/--board is required (to use %s)", a)
+			}
+			mode := modeNameFor(a)
+			n := arityFor(mode, b)
+			start, end := i+1, i+1+n
+			if end > len(args) {
+				return nil, fmt.Errorf("%s requires %d argument(s)", a, n)
+			}
+			opts.actions = append(opts.actions, pendingAction{mode: mode, args: args[start:end]})
+			i = end - 1
 		default:
 			return nil, fmt.Errorf("unrecognized argument %q", a)
 		}
 	}
 
-	if opts.modeCount > 1 {
-		return nil, fmt.Errorf("only one of -l/-f/-r/-d may be given")
-	}
 	return opts, nil
 }
 
@@ -143,55 +197,54 @@ func run(args []string) int {
 		return exitUsage
 	}
 
-	if opts.mode == "" {
-		fmt.Fprintln(os.Stderr, "wd-control-tool: one of -l/--led, -f/--fan, -r/--rtc, -d/--display is required")
+	if len(opts.actions) == 0 {
+		fmt.Fprintln(os.Stderr, "wd-control-tool: at least one of -l/--led, -f/--fan, -r/--rtc, -d/--display is required")
 		printUsage(os.Stderr)
 		return exitUsage
 	}
-	if !opts.commandGiven {
-		fmt.Fprintf(os.Stderr, "wd-control-tool: -c/--command is required with -%c/--%s\n", opts.mode[0], opts.mode)
-		return exitUsage
-	}
 
-	act, code := buildAction(b, opts.mode, opts.serial, opts.cmdArgs)
-	if act == nil {
-		return code // a usage error building the action itself (e.g. wrong arg count)
+	// Actions run in the order they appeared on the command line.
+	// Under a real (non-dry-run) run, the first one that fails stops
+	// the rest - runAction only ever returns a non-exitOK code in
+	// that case, since under -n it always reports and returns 0.
+	for _, pa := range opts.actions {
+		act, code := buildAction(b, pa.mode, opts.serial, pa.args)
+		if act == nil {
+			return code
+		}
+		if code := runAction(act, opts.dryRun, opts.debug); code != exitOK {
+			return code
+		}
 	}
-	return runAction(act, opts.dryRun, opts.debug)
+	return exitOK
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `wd-control-tool -b BOARD <-l|-f|-r|-d> [-n] [-D] -c ARG...
+	fmt.Fprint(w, `wd-control-tool -b BOARD [-n] [-D] <ACTION>...
 wd-control-tool -h | --help
 wd-control-tool -v | --version
 
--c/--command must come LAST: everything after it is taken verbatim as
-the selected command's own argument list and is never parsed as a
-flag, even if it looks like one. Put -n/-D (and -b and the mode flag)
-before -c, not after.
+Each ACTION is a mode flag followed directly by its own fixed number
+of arguments - no delimiter is needed, and several actions can be
+chained in one command, run in the order given:
+  -l, --led ...       led command (see below)
+  -f, --fan LEVEL     board-native units - see README.md
+  -r, --rtc write      ex4 only for now - see SPEC.md
+  -d, --display TEXT   ex4 only
 
-Boards (-b/--board): ex2u, ex2, ex4
-
-Exactly one of these selects what -c's arguments mean:
-  -l, --led       led command (see below)
-  -f, --fan       fan LEVEL (board-native units - see README.md)
-  -r, --rtc       rtc write (ex4 only for now - see SPEC.md)
-  -d, --display   display TEXT (ex4 only)
-
-led's own arguments (after -c):
+led's own arguments:
   ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking
   ex2u:      STATE              states: on,off,blinking,breathing
 
-Modifiers (before -c):
-  -n, --dry-run   print what would be done, touch no hardware; combines with everything, exits 0 even if the real run would fail
+Modifiers (may appear anywhere, apply to every action in the command):
+  -n, --dry-run   print what would be done, touch no hardware; exits 0 even if the real run would fail
   -D, --debug     print extra diagnostics (frame bytes / register addresses) alongside normal output; changes nothing about what is done
   --serial PATH   MCU serial device (default /dev/ttyS1 - confirmed on EX2/EX4; EX2U's uart1 tty node is NOT yet confirmed)
 
 Examples:
-  wd-control-tool -b ex4 --led -c power blue on
-  wd-control-tool -b ex2u -f -n -D -c 50
-  wd-control-tool -b ex4 -r -c write
-  wd-control-tool -b ex4 -d -c "Booting..."
+  wd-control-tool -b ex2 -f 3
+  wd-control-tool -b ex4 --display "Booting..."
+  wd-control-tool -b ex2 --led power blue on -f 1
 
 Exit codes: 0 ok, 1 usage/argument error, 2 not supported on this board, 3 hardware I/O error.
 `)
@@ -237,9 +290,11 @@ func runAction(a *action, dryRun, debug bool) int {
 }
 
 // buildAction dispatches to the per-mode builder. Returns (nil, code)
-// for a hard usage error (wrong argument count - not something -n
-// should neutralize, since there is no well-formed command to
-// simulate at all).
+// for a hard usage error. Argument COUNT is already guaranteed
+// correct by parseArgs' fixed arity - any remaining validation here
+// (unknown zone/color/state names, level out of range, "rtc"'s only
+// recognized subcommand) is a value problem, reported via
+// action.planErr so -n can still describe it as "would fail".
 func buildAction(b board.Board, mode, serialPath string, args []string) (*action, int) {
 	switch mode {
 	case "fan":
@@ -255,23 +310,16 @@ func buildAction(b board.Board, mode, serialPath string, args []string) (*action
 	}
 }
 
-func usageErr(format string, a ...any) (*action, int) {
-	fmt.Fprintf(os.Stderr, "wd-control-tool: "+format+"\n", a...)
-	return nil, exitUsage
-}
-
 func unsupportedErr(format string, a ...any) (*action, int) {
 	fmt.Fprintf(os.Stderr, "wd-control-tool: "+format+"\n", a...)
 	return nil, exitUnsupported
 }
 
 func buildFanAction(b board.Board, serialPath string, args []string) (*action, int) {
-	if len(args) != 1 {
-		return usageErr("usage: -b BOARD -f -c LEVEL")
-	}
 	level, err := strconv.Atoi(args[0])
 	if err != nil {
-		return usageErr("fan level must be an integer: %v", err)
+		fmt.Fprintf(os.Stderr, "wd-control-tool: fan level must be an integer: %v\n", err)
+		return nil, exitUsage
 	}
 
 	switch b {
@@ -327,9 +375,6 @@ func buildFanAction(b board.Board, serialPath string, args []string) (*action, i
 
 func buildLEDAction(b board.Board, serialPath string, args []string) (*action, int) {
 	if b == board.EX2U {
-		if len(args) != 1 {
-			return usageErr("usage: -b ex2u -l -c STATE   (STATE: %s)", strings.Join(mcu.EX2ULEDStates, ", "))
-		}
 		state := args[0]
 		frame, ferr := mcu.EX2ULEDFrame(state)
 		return &action{
@@ -358,9 +403,6 @@ func buildLEDAction(b board.Board, serialPath string, args []string) (*action, i
 
 	if b != board.EX2 && b != board.EX4 {
 		return unsupportedErr("led is not supported on board %v", b)
-	}
-	if len(args) != 3 {
-		return usageErr("usage: -b BOARD -l -c ZONE COLOR STATE")
 	}
 
 	zone, err := parseZone(args[0])
@@ -400,9 +442,6 @@ func buildDisplayAction(b board.Board, serialPath string, args []string) (*actio
 	if !b.HasDisplay() {
 		return unsupportedErr("board %v has no display", b)
 	}
-	if len(args) != 1 {
-		return usageErr("usage: -b ex4 -d -c TEXT")
-	}
 	text := args[0]
 	frame := mcu.EX4DisplayFrame(text)
 	return &action{
@@ -420,8 +459,9 @@ func buildDisplayAction(b board.Board, serialPath string, args []string) (*actio
 }
 
 func buildRTCAction(b board.Board, serialPath string, args []string) (*action, int) {
-	if len(args) != 1 || args[0] != "write" {
-		return usageErr("usage: -b BOARD -r -c write")
+	if args[0] != "write" {
+		fmt.Fprintf(os.Stderr, "wd-control-tool: unknown rtc subcommand %q (only \"write\" is supported)\n", args[0])
+		return nil, exitUsage
 	}
 
 	switch b {
