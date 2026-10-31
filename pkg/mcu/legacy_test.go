@@ -107,10 +107,63 @@ func TestEX4FanLevelFrame_RejectsOutOfRange(t *testing.T) {
 }
 
 func TestEX4DateTimeFrame(t *testing.T) {
-	got := EX4DateTimeFrame(2026, 10, 31, 6, 14, 5, 30)
+	got, err := EX4DateTimeFrame(2026, 10, 31, 6, 14, 5, 30)
+	if err != nil {
+		t.Fatalf("EX4DateTimeFrame: %v", err)
+	}
 	want := buildDateTimeFrame(ex4WDateAndTime, 2026, 10, 31, 6, 14, 5, 30)
 	if !bytes.Equal(got, want) {
 		t.Errorf("EX4DateTimeFrame = % X, want % X", got, want)
+	}
+}
+
+// Found by actually running toBCD against negative inputs (not just
+// reading the formula): ((v/10)<<4)|(v%10) can produce a byte that
+// collides with the frame's own FA/FB markers for specific negative
+// values (confirmed: -5/-15 -> 0xFB, -6/-16 -> 0xFA), which would
+// corrupt the frame rather than just encode the wrong date. Every
+// field must be range-checked before it ever reaches toBCD.
+func TestEX4DateTimeFrame_RejectsOutOfRangeFields(t *testing.T) {
+	cases := []struct {
+		name                                string
+		year, mon, dom, dow, hour, min, sec int
+	}{
+		{"negative year", -1, 1, 1, 0, 0, 0, 0},
+		{"month 0", 2026, 0, 1, 0, 0, 0, 0},
+		{"month 13", 2026, 13, 1, 0, 0, 0, 0},
+		{"dom 0", 2026, 1, 0, 0, 0, 0, 0},
+		{"dom 32", 2026, 1, 32, 0, 0, 0, 0},
+		{"dow -1 (the actual bug: collides with a frame marker)", 2026, 1, 1, -1, 0, 0, 0},
+		{"dow -6 (collides with 0xFA)", 2026, 1, 1, -6, 0, 0, 0},
+		{"dow -5 (collides with 0xFB)", 2026, 1, 1, -5, 0, 0, 0},
+		{"dow 7", 2026, 1, 1, 7, 0, 0, 0},
+		{"hour -1", 2026, 1, 1, 0, -1, 0, 0},
+		{"hour 24", 2026, 1, 1, 0, 24, 0, 0},
+		{"min -1", 2026, 1, 1, 0, 0, -1, 0},
+		{"min 60", 2026, 1, 1, 0, 0, 60, 0},
+		{"sec -1", 2026, 1, 1, 0, 0, 0, -1},
+		{"sec 60", 2026, 1, 1, 0, 0, 0, 60},
+	}
+	for _, c := range cases {
+		frame, err := EX4DateTimeFrame(c.year, c.mon, c.dom, c.dow, c.hour, c.min, c.sec)
+		if err == nil {
+			t.Errorf("%s: want error, got nil (frame = % X)", c.name, frame)
+		}
+		if frame != nil {
+			t.Errorf("%s: want nil frame on error, got % X", c.name, frame)
+		}
+	}
+}
+
+// The two specific inputs the bug report was built around - confirm
+// the fix actually prevents the collision, not just that *an* error
+// is returned for *some* reason.
+func TestEX4DateTimeFrame_NegativeDowNeverProducesFrameMarkerByte(t *testing.T) {
+	for dow := -20; dow < 0; dow++ {
+		frame, err := EX4DateTimeFrame(2026, 1, 1, dow, 0, 0, 0)
+		if err == nil {
+			t.Fatalf("dow=%d: want error (negative dow is always invalid), got frame % X", dow, frame)
+		}
 	}
 }
 

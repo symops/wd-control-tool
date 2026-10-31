@@ -1,5 +1,7 @@
 package mcu
 
+import "fmt"
+
 // EX4's legacy MCU, /dev/ttyS1, 19200 8N1.
 //
 // Table rows below are exact byte-for-byte extractions from the real
@@ -56,17 +58,55 @@ func (m *EX4) RequestDateAndTime() error {
 	return sendLegacy(m.p, buildFixedFrame(ex4RDateAndTime))
 }
 
+// validateDateTimeFields rejects out-of-range WDateAndTime fields
+// before they ever reach toBCD. This isn't just "garbage in, garbage
+// out": toBCD's ((v/10)<<4)|(v%10) formula, fed a negative value,
+// can produce a byte that collides with the frame's own FA/FB
+// markers (confirmed: toBCD(-5)=0xFB, toBCD(-6)=0xFA, toBCD(-15)=
+// 0xFB, toBCD(-16)=0xFA) - that would corrupt the frame itself, not
+// just send the wrong date. Every real caller (rtc.EX4Writer.Set,
+// via time.Time's own fields) only ever passes values already in
+// range, so this is defense for EX4DateTimeFrame/SetDateAndTime's
+// other callers (both exported), not a path exercised day to day.
+func validateDateTimeFields(year, mon, dom, dow, hour, min, sec int) error {
+	switch {
+	case year < 0:
+		return fmt.Errorf("mcu: year must be >= 0, got %d", year)
+	case mon < 1 || mon > 12:
+		return fmt.Errorf("mcu: month must be 1-12, got %d", mon)
+	case dom < 1 || dom > 31:
+		return fmt.Errorf("mcu: day of month must be 1-31, got %d", dom)
+	case dow < 0 || dow > 6:
+		return fmt.Errorf("mcu: day of week must be 0-6, got %d", dow)
+	case hour < 0 || hour > 23:
+		return fmt.Errorf("mcu: hour must be 0-23, got %d", hour)
+	case min < 0 || min > 59:
+		return fmt.Errorf("mcu: minute must be 0-59, got %d", min)
+	case sec < 0 || sec > 59:
+		return fmt.Errorf("mcu: second must be 0-59, got %d", sec)
+	default:
+		return nil
+	}
+}
+
 // EX4DateTimeFrame builds WDateAndTime's frame without sending it -
 // see buildDateTimeFrame's doc comment for the wire layout. year is
 // the full year (e.g. 2026); only the low 2 digits travel on the wire
 // (BCD).
-func EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec int) []byte {
-	return buildDateTimeFrame(ex4WDateAndTime, year, mon, dom, dow, hour, min, sec)
+func EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec int) ([]byte, error) {
+	if err := validateDateTimeFields(year, mon, dom, dow, hour, min, sec); err != nil {
+		return nil, err
+	}
+	return buildDateTimeFrame(ex4WDateAndTime, year, mon, dom, dow, hour, min, sec), nil
 }
 
 // SetDateAndTime writes the RTC.
 func (m *EX4) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
-	return sendLegacy(m.p, EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec))
+	frame, err := EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec)
+	if err != nil {
+		return err
+	}
+	return sendLegacy(m.p, frame)
 }
 
 // EX4DisplayFrame builds SysName's frame without sending it. The

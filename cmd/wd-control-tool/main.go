@@ -467,10 +467,11 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 		now := time.Now()
 		year, mon, dom := now.Date()
 		dow := int(now.Weekday())
-		frame := mcu.EX4DateTimeFrame(year, int(mon), dom, dow, now.Hour(), now.Minute(), now.Second())
+		frame, ferr := mcu.EX4DateTimeFrame(year, int(mon), dom, dow, now.Hour(), now.Minute(), now.Second())
 		return &action{
 			describe:   fmt.Sprintf("write current time (%s) to EX4 MCU RTC (%s)", now.Format(time.RFC3339), serialPath),
-			debugLines: frameDebugLines(nil, frame, serialPath, 19200),
+			debugLines: frameDebugLines(ferr, frame, serialPath, 19200),
+			planErr:    ferr,
 			apply: func() error {
 				p, err := mcu.Open(serialPath, 19200)
 				if err != nil {

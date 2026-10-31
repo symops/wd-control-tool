@@ -27,7 +27,10 @@ func TestEX4Writer_Set(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
-	want := mcu.EX4DateTimeFrame(2026, 11, 1, 0, 10, 20, 30)
+	want, err := mcu.EX4DateTimeFrame(2026, 11, 1, 0, 10, 20, 30)
+	if err != nil {
+		t.Fatalf("EX4DateTimeFrame: %v", err)
+	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X", got, want)
 	}
