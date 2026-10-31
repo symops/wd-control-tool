@@ -746,3 +746,39 @@ func TestRun_UsageExamplesActuallyWork(t *testing.T) {
 		}
 	}
 }
+
+// Same idea, for README.md's own (longer, and partly overlapping)
+// "Quick start" example list - a different document than printUsage,
+// kept in sync by hand just the same, so tested separately in case
+// one drifts without the other. Two examples (the last two) already
+// include -n/-D themselves and are used as-is.
+func TestRun_ReadmeExamplesActuallyWork(t *testing.T) {
+	examples := [][]string{
+		{"-b", "ex2u", "-f", "50"},
+		{"-b", "ex2u", "-l", "breathing"},
+		{"-b", "ex2", "-f", "3"},
+		{"-b", "ex2", "--led", "power", "blue", "on"},
+		{"-b", "ex4", "-f", "2"},
+		{"-b", "ex4", "--led", "power", "blue", "on"},
+		{"-b", "ex4", "--display", "Booting..."},
+		{"-b", "ex4", "-r", "write"},
+		{"-b", "ex2", "--led", "power", "blue", "on", "-f", "1"},
+		{"-b", "ex4", "-n", "-D", "--led", "power", "blue", "on"},
+	}
+	for _, args := range examples {
+		withDryRun := args
+		hasDryRun := false
+		for _, a := range args {
+			if a == "-n" {
+				hasDryRun = true
+			}
+		}
+		if !hasDryRun {
+			withDryRun = append(append([]string{}, args...), "-n")
+		}
+		code, _, errOut := captureRun(t, withDryRun)
+		if code != exitOK {
+			t.Errorf("README example %v: code=%d err=%q", args, code, errOut)
+		}
+	}
+}
