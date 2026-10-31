@@ -148,7 +148,18 @@ are described in full; see "Full command tables" for every row):
   `byte(len(text))`, which wraps to 0 for exactly 256 bytes, producing
   a frame that lies about its own payload length (see git history for
   the fix - this is the kind of implementation bug this spec can't
-  capture by describing the wire format alone).
+  capture by describing the wire format alone). Separately,
+  `EX4DisplayFrame` also rejects any text whose bytes - or whose LEN
+  byte, `byte(len(text))` itself - equal `0xFA`/`0xFB`: this tool has
+  never decoded the MCU's receive-side parsing loop (see "Unresolved"
+  #1 below), so it does not know whether the firmware trusts LEN for
+  a fixed-size read or re-scans for the end marker, and either way a
+  literal marker byte inside the text (or a 250/251-byte text, whose
+  LEN byte alone is `0xFA`/`0xFB`) would corrupt the frame. `--display`
+  takes text "verbatim" at the shell level (it isn't treated as a
+  flag even if it looks like one), but `os.Args` bytes aren't
+  guaranteed valid UTF-8, so a crafted argument (e.g. `$'\xfa\xfb'`,
+  or a 250-byte string) really can hit this.
 - **group 8 (`DeviceShutdown`/`MCUReset`/`DeviceShutdownByUPS`)**: `FA
   b4 b5 b6 b7 VALUE FB` - the final byte is a **runtime** value, not a
   table constant. `MCUReset` in particular requires a numeric argument

@@ -111,11 +111,19 @@ Coverage, all without root or real hardware:
   `shutdownFamily`, `EX4DisplayFrame`'s LEN byte - see git history)
   all came from the same root cause: a value landing directly in a
   wire frame without being checked against the frame's own FA/FB
-  markers. `make fuzz` runs four native Go fuzz tests, each clean for
+  markers. `make fuzz` runs five native Go fuzz tests, each clean for
   millions of executions:
   - `FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload`
     (`pkg/mcu/legacy_test.go`) formalizes the frame-marker-collision
     property fixed by hand for specific boundary cases.
+  - `FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload`
+    (`pkg/mcu/legacy_test.go`) checks the same property for
+    `EX4DisplayFrame`'s free-form text payload - and found a real,
+    previously-unguarded instance on its first real run: a 250 or
+    251-byte text makes the LEN byte itself (`byte(len(text))`) equal
+    `0xFA`/`0xFB`, even with no colliding byte anywhere in the text.
+    `EX4DisplayFrame` now rejects both that and any literal
+    `0xFA`/`0xFB` byte inside the text itself.
   - `FuzzParseArgs_NeverPanics` (`cmd/wd-control-tool/main_test.go`)
     checks the hand-rolled argv parser's own bounds-checked
     indexing/slicing never panics on malformed input.

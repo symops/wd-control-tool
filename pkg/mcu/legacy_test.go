@@ -229,6 +229,59 @@ func TestEX4DisplayFrame_LengthBoundary(t *testing.T) {
 	}
 }
 
+// A literal 0xFA/0xFB byte anywhere in the text - reachable via a
+// deliberately crafted argument (os.Args bytes aren't guaranteed
+// valid UTF-8) - must be rejected, not silently embedded where it
+// would corrupt the frame under either possible receiver parsing
+// strategy (see EX4DisplayFrame's doc comment).
+func TestEX4DisplayFrame_RejectsEmbeddedMarkerBytes(t *testing.T) {
+	cases := []string{
+		"\xfa",
+		"\xfb",
+		"abc\xfadef",
+		"abc\xfbdef",
+		"\xfa\xfb",
+		"trailing\xfa",
+	}
+	for _, text := range cases {
+		if frame, err := EX4DisplayFrame(text); err == nil {
+			t.Errorf("EX4DisplayFrame(%q): want error, got frame % X", text, frame)
+		}
+	}
+
+	// A byte that merely LOOKS risky but isn't actually FA/FB (0xF9,
+	// 0xFC) must still be accepted - this is a marker-collision guard,
+	// not a blanket "no high bytes" restriction.
+	for _, text := range []string{"\xf9", "\xfc", "normal text"} {
+		if _, err := EX4DisplayFrame(text); err != nil {
+			t.Errorf("EX4DisplayFrame(%q): unexpected error: %v", text, err)
+		}
+	}
+}
+
+// The LEN byte (byte(len(text))) is just as capable of colliding as
+// any text byte: a 250 or 251-byte string makes LEN itself equal
+// 0xFA/0xFB even though every character in the text is ordinary.
+// Found by FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload, not by
+// manual review - pinned explicitly here since it's an easy case to
+// walk right past ("check every text byte" doesn't cover the LEN
+// byte, which isn't a text byte). 249/252 are the immediate
+// neighbors and must still be accepted.
+func TestEX4DisplayFrame_RejectsLengthThatMakesLenByteCollide(t *testing.T) {
+	if _, err := EX4DisplayFrame(strings.Repeat("0", 250)); err == nil {
+		t.Error("EX4DisplayFrame(250 bytes): want error (LEN byte would be 0xFA), got nil")
+	}
+	if _, err := EX4DisplayFrame(strings.Repeat("0", 251)); err == nil {
+		t.Error("EX4DisplayFrame(251 bytes): want error (LEN byte would be 0xFB), got nil")
+	}
+	if _, err := EX4DisplayFrame(strings.Repeat("0", 249)); err != nil {
+		t.Errorf("EX4DisplayFrame(249 bytes): unexpected error: %v", err)
+	}
+	if _, err := EX4DisplayFrame(strings.Repeat("0", 252)); err != nil {
+		t.Errorf("EX4DisplayFrame(252 bytes): unexpected error: %v", err)
+	}
+}
+
 // Formal version of the property manually checked (and fixed) for
 // specific boundary cases in TestEX4DateTimeFrame_RejectsOutOfRangeFields:
 // no input that validateDateTimeFields accepts may ever produce a
@@ -259,6 +312,36 @@ func FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload(f *testing.F) {
 			if frame[i] == legacyStart || frame[i] == legacyEnd {
 				t.Fatalf("payload byte %d = 0x%02X collides with a frame marker - frame=% X (inputs: year=%d mon=%d dom=%d dow=%d hour=%d min=%d sec=%d)",
 					i, frame[i], frame, year, mon, dom, dow, hour, min, sec)
+			}
+		}
+	})
+}
+
+// Same property as FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload,
+// for EX4DisplayFrame's text payload: any input EX4DisplayFrame
+// accepts must produce a frame whose only FA/FB bytes are the real
+// start/end markers at position 0 and len-1. Run with
+// `go test -fuzz=FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload
+// ./pkg/mcu` to fuzz beyond the seed corpus.
+func FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload(f *testing.F) {
+	f.Add("")
+	f.Add("Booting...")
+	f.Add(strings.Repeat("A", 255))
+	f.Add("\xfa")
+	f.Add("\xfb")
+	f.Add("abc\xfadef\xfbghi")
+
+	f.Fuzz(func(t *testing.T, text string) {
+		frame, err := EX4DisplayFrame(text)
+		if err != nil {
+			return // correctly rejected (too long, or an embedded marker byte)
+		}
+		if len(frame) != len(text)+6 {
+			t.Fatalf("accepted text %q (%d bytes) produced a %d-byte frame, want %d", text, len(text), len(frame), len(text)+6)
+		}
+		for i := 1; i < len(frame)-1; i++ {
+			if frame[i] == legacyStart || frame[i] == legacyEnd {
+				t.Fatalf("frame byte %d = 0x%02X collides with a frame marker - frame=% X (input text=%q)", i, frame[i], frame, text)
 			}
 		}
 	})

@@ -121,9 +121,41 @@ func (m *EX4) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
 // through with nothing else bounding its length - so it's checked
 // here rather than left as a "not reachable via the current product"
 // footnote.
+//
+// Same reasoning applies to the payload bytes themselves, not just
+// the LEN byte: this tool has never decoded the MCU firmware's own
+// receive-side parsing loop (see SPEC.md, "unresolved" #1), so
+// whether it trusts LEN for a fixed-size read or re-scans for FB is
+// unknown - and a literal 0xFA/0xFB byte inside text would corrupt
+// the frame under either interpretation (it either looks like a
+// second start marker, or a premature end marker). `--display`'s
+// README contract is "taken verbatim, even if it looks like a flag",
+// which is about shell-level flag-sniffing, not about bytes that
+// alias the wire protocol's own markers - os.Args bytes aren't
+// guaranteed valid UTF-8 (e.g. `--display $'\xfa\xfb'`), so this is
+// reachable with a deliberately crafted argument, the same way the
+// BCD and shutdown-byte collisions were reachable with a crafted
+// field value.
 func EX4DisplayFrame(text string) ([]byte, error) {
 	if len(text) > 255 {
 		return nil, fmt.Errorf("mcu: display text too long (%d bytes, max 255)", len(text))
+	}
+	// The LEN byte itself - byte(len(text)), written just before the
+	// text - is just as capable of colliding as any payload byte: a
+	// 250 or 251-byte text (0xFA/0xFB) produces a LEN byte that IS a
+	// frame marker, even if every character in the text is perfectly
+	// ordinary. Found by FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload
+	// on its very first real run (a 250-byte all-'0' string), not by
+	// manual review - exactly the kind of boundary a human reviewer
+	// checking "does any text byte collide" tends to walk right past
+	// because the LEN byte isn't a text byte at all.
+	if n := byte(len(text)); n == legacyStart || n == legacyEnd {
+		return nil, fmt.Errorf("mcu: display text length %d (0x%02X) would make the frame's own LEN byte collide with its start/end marker", len(text), n)
+	}
+	for i := 0; i < len(text); i++ {
+		if b := text[i]; b == legacyStart || b == legacyEnd {
+			return nil, fmt.Errorf("mcu: display text byte %d (0x%02X) would collide with the frame's own start/end marker", i, b)
+		}
 	}
 	return buildTextFrame(ex4SysName, text), nil
 }
