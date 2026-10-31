@@ -686,3 +686,40 @@ func captureRunAction(t *testing.T, a *action, dryRun, debug bool) (code int, st
 	os.Stdout, os.Stderr = origOut, origErr
 	return code, <-outCh, <-errCh
 }
+
+// parseArgs does its own bounds-checked indexing/slicing (i++,
+// args[start:end]) rather than going through the stdlib flag
+// package, which is exactly the kind of hand-rolled parsing logic
+// that tends to hide an off-by-one. It must never panic, only ever
+// return a plain error, no matter how malformed the input is. Run
+// with `go test -fuzz=FuzzParseArgs_NeverPanics ./cmd/wd-control-tool`
+// to actually fuzz beyond the seed corpus.
+func FuzzParseArgs_NeverPanics(f *testing.F) {
+	for _, seed := range []string{
+		"-b ex4 -f 3",
+		"-b ex2u --led breathing",
+		"",
+		"-b",
+		"--serial",
+		"-l",
+		"-f -f -f -f",
+		"--board=",
+		"--serial=",
+		"-b ex4 -l",
+		"-b ex4 -l power",
+		"-b ex4 -l power blue",
+		"-h -v -b ex4 -f 1",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, s string) {
+		args := strings.Fields(s)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("parseArgs(%q) panicked: %v", args, r)
+			}
+		}()
+		_, _ = parseArgs(args)
+	})
+}

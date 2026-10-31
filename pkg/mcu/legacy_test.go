@@ -228,3 +228,38 @@ func TestEX4DisplayFrame_LengthBoundary(t *testing.T) {
 		t.Error("EX4DisplayFrame(256 bytes): want error (LEN byte would wrap to 0), got nil")
 	}
 }
+
+// Formal version of the property manually checked (and fixed) for
+// specific boundary cases in TestEX4DateTimeFrame_RejectsOutOfRangeFields:
+// no input that validateDateTimeFields accepts may ever produce a
+// payload byte equal to the frame's own FA/FB markers. Go's native
+// fuzzer explores far more of the input space than hand-picked cases
+// can - run with `go test -fuzz=FuzzEX4DateTimeFrame ./pkg/mcu` to
+// actually fuzz beyond the seed corpus; a plain `go test` only runs
+// the seeds (fast, still useful as a regression check).
+func FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload(f *testing.F) {
+	f.Add(2026, 10, 31, 6, 14, 5, 30)
+	f.Add(0, 1, 1, 0, 0, 0, 0)
+	f.Add(-1, -6, -16, -5, -1, -1, -1) // the exact values that used to collide
+	f.Add(9999, 12, 31, 6, 23, 59, 59)
+
+	f.Fuzz(func(t *testing.T, year, mon, dom, dow, hour, min, sec int) {
+		frame, err := EX4DateTimeFrame(year, mon, dom, dow, hour, min, sec)
+		if err != nil {
+			return // correctly rejected - nothing on the wire to check
+		}
+		if len(frame) != 13 {
+			t.Fatalf("accepted input produced a %d-byte frame, want 13 (year=%d mon=%d dom=%d dow=%d hour=%d min=%d sec=%d)",
+				len(frame), year, mon, dom, dow, hour, min, sec)
+		}
+		// frame[0] and frame[12] are the real start/end markers;
+		// nothing in between (the header bytes and the 7 BCD payload
+		// bytes) may equal either marker value.
+		for i := 1; i < len(frame)-1; i++ {
+			if frame[i] == legacyStart || frame[i] == legacyEnd {
+				t.Fatalf("payload byte %d = 0x%02X collides with a frame marker - frame=% X (inputs: year=%d mon=%d dom=%d dow=%d hour=%d min=%d sec=%d)",
+					i, frame[i], frame, year, mon, dom, dow, hour, min, sec)
+			}
+		}
+	})
+}
