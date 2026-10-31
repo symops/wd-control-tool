@@ -96,6 +96,34 @@ func TestRun_BoardPositionDoesNotMatter(t *testing.T) {
 	}
 }
 
+// A second -b/--board with a DIFFERENT value must be a hard usage
+// error, not silently let the last one win for every action in the
+// command - confirmed confusing in practice: this exact command used
+// to apply ex4 to the first action too, reporting a baffling
+// "unsupported fan level 50" for a value that is perfectly valid on
+// the ex2u the user actually wrote right before it.
+func TestRun_ConflictingBoardValuesRejected(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-b", "ex4", "-f", "2"})
+	if code != exitUsage {
+		t.Errorf("code=%d, want %d; err=%q", code, exitUsage, errOut)
+	}
+	if !strings.Contains(errOut, "conflicts") {
+		t.Errorf("errOut=%q, want it to mention the conflict", errOut)
+	}
+}
+
+// Repeating the SAME board value is harmless (if pointless) and must
+// not be rejected.
+func TestRun_RepeatedSameBoardValueAllowed(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-b", "ex4", "-n", "-f", "2", "-b", "ex4", "-f", "1"})
+	if code != exitOK {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "level 2") || !strings.Contains(out, "level 1") {
+		t.Errorf("out=%q, want both actions described", out)
+	}
+}
+
 // Omitting -b/--board entirely, with a mode flag present, must still
 // be a usage error (there is nothing to resolve led's arity against,
 // and no board to act on regardless).

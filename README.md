@@ -49,7 +49,10 @@ wd-control-tool -b ex4 -n -D --led power blue on       # preview the exact bytes
 ```
 
 - `-b`/`--board` selects the board: `ex2u`, `ex2` or `ex4` (required;
-  may appear anywhere on the command line).
+  may appear anywhere on the command line, and applies to every
+  action in the command - repeating it with a *different* value is a
+  usage error, not a way to switch boards partway through one
+  command).
 - Each action is one of `-l/--led`, `-f/--fan`, `-r/--rtc`,
   `-d/--display`, followed directly by its own fixed number of
   arguments (no delimiter needed - see the table below). Several

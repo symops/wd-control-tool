@@ -99,6 +99,22 @@ func arityFor(mode string, b board.Board) int {
 func parseArgs(args []string) (*options, error) {
 	opts := &options{serial: "/dev/ttyS1"}
 
+	// setBoard rejects a second -b/--board with a DIFFERENT value
+	// outright, rather than silently letting the last one win for
+	// every action in the command (including ones a user wrote right
+	// after an earlier, different -b, expecting THAT one to apply -
+	// confirmed confusing in practice: `-b ex2u -f 50 -b ex4 -f 2`
+	// used to apply ex4 to both actions, reporting a baffling
+	// "unsupported fan level 50" for a value that is perfectly valid
+	// on ex2u). Repeating the SAME value is harmless and allowed.
+	setBoard := func(flag, value string) error {
+		if opts.board != "" && opts.board != value {
+			return fmt.Errorf("%s=%s conflicts with an earlier -b/--board=%s in the same command", flag, value, opts.board)
+		}
+		opts.board = value
+		return nil
+	}
+
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "-b" || a == "--board" {
@@ -106,9 +122,13 @@ func parseArgs(args []string) (*options, error) {
 			if i >= len(args) {
 				return nil, fmt.Errorf("%s requires a value", a)
 			}
-			opts.board = args[i]
+			if err := setBoard(a, args[i]); err != nil {
+				return nil, err
+			}
 		} else if strings.HasPrefix(a, "--board=") {
-			opts.board = strings.TrimPrefix(a, "--board=")
+			if err := setBoard("--board", strings.TrimPrefix(a, "--board=")); err != nil {
+				return nil, err
+			}
 		}
 	}
 
