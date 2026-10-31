@@ -1,6 +1,7 @@
 package led
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/symops/wd-control-tool/test/fakeregio"
@@ -199,12 +200,23 @@ func TestPlan_MatchesSetBehavior(t *testing.T) {
 func TestPlan_RejectsBadInput(t *testing.T) {
 	if _, err := Plan(Power, Color(99), On); err == nil {
 		t.Error("Plan with invalid color: want error, got nil")
+	} else if !strings.Contains(err.Error(), "99") {
+		// The error must name the actual bad value, not "unknown" -
+		// Color implements String(), which makes a naive %v on an
+		// out-of-range value print exactly "unknown" (verified by
+		// actually running this before fixing it, not just reasoning
+		// about fmt's behavior).
+		t.Errorf("error = %q, want it to mention the value 99", err)
 	}
 	if _, err := Plan(HD0, Red, State(99)); err == nil {
 		t.Error("Plan with invalid state: want error, got nil")
+	} else if !strings.Contains(err.Error(), "99") {
+		t.Errorf("error = %q, want it to mention the value 99", err)
 	}
 	if _, err := Plan(Zone(99), Red, On); err == nil {
 		t.Error("Plan with invalid zone: want error, got nil")
+	} else if !strings.Contains(err.Error(), "99") {
+		t.Errorf("error = %q, want it to mention the value 99", err)
 	}
 }
 
