@@ -130,3 +130,31 @@ func TestEx2FanPlan_AlwaysClearsFirst(t *testing.T) {
 		}
 	}
 }
+
+// Ex2FanPlan must never panic for any int, and every write it
+// produces must target one of the 2 known fan registers - the level
+// range check (0-6) is the only thing standing between an arbitrary
+// caller-supplied int and ex2FanBits[level-1]'s array index. Run with
+// `go test -fuzz=FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters ./pkg/fan`
+// to fuzz beyond the seed corpus.
+func FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
+	f.Add(0)
+	f.Add(6)
+	f.Add(-1)
+	f.Add(7)
+	f.Add(1 << 20)
+
+	knownAddrs := map[int64]bool{ex2FanReg1: true, ex2FanReg2: true}
+
+	f.Fuzz(func(t *testing.T, level int) {
+		ws, err := Ex2FanPlan(level)
+		if err != nil {
+			return
+		}
+		for _, w := range ws {
+			if !knownAddrs[w.Addr] {
+				t.Fatalf("Ex2FanPlan(%d) wrote to unknown address 0x%x", level, w.Addr)
+			}
+		}
+	})
+}

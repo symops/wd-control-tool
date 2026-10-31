@@ -111,12 +111,21 @@ Coverage, all without root or real hardware:
   `shutdownFamily`, `EX4DisplayFrame`'s LEN byte - see git history)
   all came from the same root cause: a value landing directly in a
   wire frame without being checked against the frame's own FA/FB
-  markers. Two native Go fuzz tests (`make fuzz`) formalize the
-  properties fixed by hand for specific boundary cases -
-  `FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload` in
-  `pkg/mcu/legacy_test.go` and `FuzzParseArgs_NeverPanics` in
-  `cmd/wd-control-tool/main_test.go` - and have each run clean for
-  millions of executions.
+  markers. `make fuzz` runs four native Go fuzz tests, each clean for
+  millions of executions:
+  - `FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload`
+    (`pkg/mcu/legacy_test.go`) formalizes the frame-marker-collision
+    property fixed by hand for specific boundary cases.
+  - `FuzzParseArgs_NeverPanics` (`cmd/wd-control-tool/main_test.go`)
+    checks the hand-rolled argv parser's own bounds-checked
+    indexing/slicing never panics on malformed input.
+  - `FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters`
+    (`pkg/led/led_test.go`) and
+    `FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters`
+    (`pkg/fan/ex2_test.go`) check that `Zone`/`Color`/`State`/level
+    values outside their declared constants (legal in Go - these are
+    plain int-based types) never panic and never produce a register
+    write to an address outside the small known set.
 - End-to-end tests (`cmd/wd-control-tool/e2e_test.go`) build the real
   binary once and exec it for a few cases, closing the one remaining
   gap everything else leaves: `main()`'s own `os.Exit(run(...))` and

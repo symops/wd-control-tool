@@ -83,6 +83,8 @@ FUZZTIME := 30s
 
 fuzz:
 	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
+	go test ./pkg/led/ -run=NONE -fuzz=FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
+	go test ./pkg/fan/ -run=NONE -fuzz=FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
 	go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzParseArgs_NeverPanics -fuzztime=$(FUZZTIME)
 
 clean:

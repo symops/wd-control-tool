@@ -272,3 +272,37 @@ func TestSet_RejectsBadInput(t *testing.T) {
 		t.Error("Set with invalid color: want error, got nil")
 	}
 }
+
+// Zone/Color/State are plain int-based types, so Plan can be called
+// with any int value cast to them, not just the declared constants -
+// exactly the kind of out-of-domain input Go's type system doesn't
+// stop at compile time. Plan must never panic for any combination,
+// and every register address it ever writes to must be one of the 4
+// known LED registers (not, say, an out-of-bounds slice access or an
+// address computed from an unvalidated index - see hdBayBit's own
+// bounds check). Run with
+// `go test -fuzz=FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters ./pkg/led`
+// to fuzz beyond the seed corpus.
+func FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
+	f.Add(int(Power), int(Red), int(On))
+	f.Add(int(HD3), int(Blue), int(Blinking))
+	f.Add(99, 99, 99)
+	f.Add(-1, -1, -1)
+
+	knownAddrs := map[int64]bool{
+		powerDataOut: true, powerBlinkEn: true,
+		hdBayDataOut: true, hdBayBlinkEn: true,
+	}
+
+	f.Fuzz(func(t *testing.T, zone, color, state int) {
+		ws, err := Plan(Zone(zone), Color(color), State(state))
+		if err != nil {
+			return
+		}
+		for _, w := range ws {
+			if !knownAddrs[w.Addr] {
+				t.Fatalf("Plan(%d,%d,%d) wrote to unknown address 0x%x", zone, color, state, w.Addr)
+			}
+		}
+	})
+}
