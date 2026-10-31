@@ -156,6 +156,36 @@ func TestEX4_ShutdownFamily_OverPTY(t *testing.T) {
 	}
 }
 
+// Found by the same reasoning that caught the toBCD bug: a raw
+// caller-supplied byte landing directly in the frame's payload can
+// corrupt the frame if it happens to equal FA/FB. DeviceShutdown/
+// MCUReset take an undocumented "code" byte with no real validation
+// possible, but colliding with the frame markers specifically must
+// still be rejected.
+//
+// This deliberately does NOT also try to confirm zero bytes reached
+// the wire via a deadlined Read on fake.Master: in this environment,
+// os.File.SetReadDeadline on a /dev/ptmx-derived fd is accepted
+// (returns no error) but does not actually unblock a pending Read -
+// confirmed by watching it hang well past the deadline under `go
+// test -timeout`, not by assumption. That made an earlier version of
+// this test itself hang. The error check below is the real guard
+// being tested either way; apply() is never reached once an error is
+// returned, so there is nothing left to confirm about the wire.
+func TestEX4_ShutdownFamily_RejectsFrameMarkerCollision(t *testing.T) {
+	for _, value := range []byte{0xFA, 0xFB} {
+		fake := fakemcu.New(t)
+		m := NewEX4(OpenFile(fake.Slave))
+
+		if err := m.DeviceShutdown(value); err == nil {
+			t.Errorf("DeviceShutdown(0x%02X): want error, got nil", value)
+		}
+		if err := m.MCUReset(value); err == nil {
+			t.Errorf("MCUReset(0x%02X): want error, got nil", value)
+		}
+	}
+}
+
 func TestEX2_AllMethods_OverPTY(t *testing.T) {
 	cases := []struct {
 		name string

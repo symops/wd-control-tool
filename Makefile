@@ -52,9 +52,16 @@ strip: verify-deps
 build-host:
 	go build -o $(BINARY) $(PKG)
 
+# -timeout is explicit (not just relying on `go test`'s own 10m
+# default) as defense in depth: a pty-based test blocking forever
+# instead of failing cleanly is a real failure mode here, not a
+# hypothetical one - see test/fakemcu's own doc comments on
+# ReadFrame/readExactly for the one that actually happened.
+TESTFLAGS := -timeout 120s
+
 test:
 	go vet ./...
-	go test ./...
+	go test $(TESTFLAGS) ./...
 
 # Several tests (pkg/mcu's pty-based ones especially) run the command
 # under test in a goroutine concurrently with the test reading the
@@ -64,7 +71,7 @@ test:
 # while iterating locally.
 test-race:
 	go vet ./...
-	go test -race ./...
+	go test -race $(TESTFLAGS) ./...
 
 clean:
 	rm -f $(BINARY) $(BINARY)-armv7 $(BINARY)-armv5

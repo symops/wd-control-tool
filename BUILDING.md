@@ -72,6 +72,24 @@ Coverage, all without root or real hardware:
   the text is exactly 10 characters - got silently expanded to
   `\r\n`. Fixed by putting the slave in raw mode in `test/fakemcu`,
   matching what `mcu.Open` always does for a real UART.
+- A second, more structural bug in the same harness: `ReadFrame`
+  originally bounded its wait with `(*os.File).SetReadDeadline`. On
+  a `/dev/ptmx`-derived master fd in this environment, a deadline is
+  accepted without error but does not actually unblock a pending
+  `Read` - confirmed by watching a bare `Read` block 5+ seconds past
+  a 500ms deadline in isolation. A test that expected zero bytes (to
+  confirm a rejected command sends nothing) hung a `go test` run past
+  its own `-timeout` because of this. Fixed by moving the read into
+  its own goroutine and enforcing the timeout with `select`/
+  `time.After` instead (`test/fakemcu/fakemcu.go`'s `readExactly`,
+  unit-tested directly in `fakemcu_test.go` including a case that
+  measures the elapsed time on a deliberate non-arrival, not just
+  that *an* error eventually comes back). This matters because every
+  pty-based test in this project depends on this timeout actually
+  working if a real regression ever sends fewer bytes than expected -
+  before this fix, that would have hung instead of failing. `make
+  test`/`make test-race` also now pass an explicit `-timeout` as a
+  second line of defense.
 - Register read/modify/write tests against a sparse temp file
   standing in for `/dev/mem` (`test/fakeregio`, used from
   `pkg/led/led_test.go`, `pkg/fan/ex2_test.go` and directly in

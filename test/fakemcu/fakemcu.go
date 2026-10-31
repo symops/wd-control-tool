@@ -14,6 +14,7 @@ package fakemcu
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -105,21 +106,59 @@ func New(t *testing.T) *Fake {
 // test sent), failing the test if they don't arrive within timeout.
 // Use this rather than a bare Read - a test asserting on a short
 // frame must not silently pass on a partial write.
+//
+// This does NOT rely on (*os.File).SetReadDeadline, despite that
+// being the obvious approach: on a /dev/ptmx-derived master fd in
+// this environment, a deadline is accepted without error but simply
+// does not unblock a pending Read - confirmed by watching a bare
+// Read block for 5+ seconds past a 500ms deadline in isolation, not
+// by assumption (an earlier version of a test in this package relied
+// on it and hung a `go test` run past its own -timeout). Instead, the
+// read happens in its own goroutine and the timeout is enforced with
+// select/time.After, which works regardless of whether the fd itself
+// honors deadlines. If the timeout fires, that goroutine is left
+// blocked on Read permanently (a deliberate, harmless leak - the test
+// binary process exits once the test run finishes either way), which
+// is the standard tradeoff for this pattern.
 func (f *Fake) ReadFrame(t *testing.T, n int, timeout time.Duration) []byte {
 	t.Helper()
-
-	if err := f.Master.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		t.Fatalf("fakemcu: set read deadline: %v", err)
-	}
-
-	buf := make([]byte, n)
-	got := 0
-	for got < n {
-		k, err := f.Master.Read(buf[got:])
-		if err != nil {
-			t.Fatalf("fakemcu: read %d/%d bytes: %v", got, n, err)
-		}
-		got += k
+	buf, err := readExactly(f.Master, n, timeout)
+	if err != nil {
+		t.Fatalf("fakemcu: %v", err)
 	}
 	return buf
+}
+
+// readExactly is ReadFrame's actual logic, factored out (and taking
+// a plain io.Reader, not *Fake) so it's directly unit-testable - in
+// particular so the "times out close to the requested duration,
+// rather than hanging" behavior that made this package switch away
+// from SetReadDeadline can be pinned with a real assertion on
+// elapsed time, not just "the overall test suite didn't hang".
+func readExactly(r io.Reader, n int, timeout time.Duration) ([]byte, error) {
+	type result struct {
+		buf []byte
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		buf := make([]byte, n)
+		got := 0
+		for got < n {
+			k, err := r.Read(buf[got:])
+			if err != nil {
+				ch <- result{nil, err}
+				return
+			}
+			got += k
+		}
+		ch <- result{buf, nil}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.buf, res.err
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("timed out after %v waiting for %d bytes", timeout, n)
+	}
 }

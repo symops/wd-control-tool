@@ -125,7 +125,18 @@ func (m *EX4) Display(text string) error {
 // requires one (`up_send_ctl MCUReset <code>` on the real tool; the
 // exact meaning of <code> was not decoded). Not wired into the CLI
 // yet; exposed for completeness.
+//
+// Whatever <code> means semantically is undocumented (so its valid
+// range can't be validated), but value lands directly in the frame's
+// last payload byte, before FB - if it happened to equal the frame's
+// own 0xFA/0xFB markers, the frame itself would be corrupted
+// regardless of what the code means (the same class of bug fixed in
+// EX4DateTimeFrame/toBCD - see that commit). That much IS a protocol
+// invariant, not a semantic guess, so it's checked here.
 func (m *EX4) shutdownFamily(c legacyCmd, value byte) error {
+	if value == legacyStart || value == legacyEnd {
+		return fmt.Errorf("mcu: value 0x%02X would collide with the frame's own start/end marker", value)
+	}
 	return sendLegacy(m.p, buildByteWriteFrame(c, value))
 }
 
