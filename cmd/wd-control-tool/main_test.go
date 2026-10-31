@@ -723,3 +723,26 @@ func FuzzParseArgs_NeverPanics(f *testing.F) {
 		_, _ = parseArgs(args)
 	})
 }
+
+// Ties printUsage's own "Examples:" section to a test: every example
+// a user would copy-paste must actually parse and dry-run
+// successfully, so documentation drift (a syntax change that makes
+// an old example stop working, the way removing -c did) is a test
+// failure, not a silent inconsistency a user discovers the hard way.
+// These are literal copies of the lines in printUsage - keep them in
+// sync by hand if that text changes, there is no automatic
+// extraction from the doc string.
+func TestRun_UsageExamplesActuallyWork(t *testing.T) {
+	examples := [][]string{
+		{"-b", "ex2", "-f", "3"},
+		{"-b", "ex4", "--display", "Booting..."},
+		{"-b", "ex2", "--led", "power", "blue", "on", "-f", "1"},
+	}
+	for _, args := range examples {
+		withDryRun := append(append([]string{}, args...), "-n")
+		code, _, errOut := captureRun(t, withDryRun)
+		if code != exitOK {
+			t.Errorf("example %v: code=%d err=%q", args, code, errOut)
+		}
+	}
+}
