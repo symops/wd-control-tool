@@ -102,3 +102,20 @@ func TestE2E_UnsupportedBoardComboExitsTwo(t *testing.T) {
 		t.Errorf("exit code = %d, want 2", code)
 	}
 }
+
+// The literal, exact chained-action example from the original
+// feature request this whole -c-less syntax exists for - confirmed
+// through the real compiled binary, not just in-process via
+// captureRun, so there is at least one black-box check of the
+// headline feature working end to end.
+func TestE2E_ChainedActionsRunInOrder(t *testing.T) {
+	code, out, _ := runE2E(t, "-b", "ex2", "-n", "--led", "power", "blue", "on", "-f", "1")
+	if code != 0 {
+		t.Fatalf("exit code = %d, out=%q", code, out)
+	}
+	ledIdx := strings.Index(out, "power")
+	fanIdx := strings.Index(out, "level 1")
+	if ledIdx == -1 || fanIdx == -1 || ledIdx > fanIdx {
+		t.Errorf("out=%q, want the led action described before the fan action", out)
+	}
+}
