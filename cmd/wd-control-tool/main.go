@@ -44,13 +44,14 @@ type pendingAction struct {
 
 // options is the result of parsing argv - see parseArgs.
 type options struct {
-	board   string
-	actions []pendingAction
-	dryRun  bool
-	debug   bool
-	serial  string
-	help    bool
-	version bool
+	board      string
+	boardValue board.Board // resolved once in parseArgs' first pass; run() reuses it instead of re-parsing opts.board (board.Parse(opts.board) can't fail a second time)
+	actions    []pendingAction
+	dryRun     bool
+	debug      bool
+	serial     string
+	help       bool
+	version    bool
 }
 
 func modeNameFor(flag string) string {
@@ -111,13 +112,12 @@ func parseArgs(args []string) (*options, error) {
 		}
 	}
 
-	var b board.Board
 	if opts.board != "" {
 		parsed, err := board.Parse(opts.board)
 		if err != nil {
 			return nil, err
 		}
-		b = parsed
+		opts.boardValue = parsed
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -148,7 +148,7 @@ func parseArgs(args []string) (*options, error) {
 				return nil, fmt.Errorf("-b/--board is required (to use %s)", a)
 			}
 			mode := modeNameFor(a)
-			n := arityFor(mode, b)
+			n := arityFor(mode, opts.boardValue)
 			start, end := i+1, i+1+n
 			if end > len(args) {
 				return nil, fmt.Errorf("%s requires %d argument(s)", a, n)
@@ -191,11 +191,9 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "wd-control-tool: -b/--board is required")
 		return exitUsage
 	}
-	b, err := board.Parse(opts.board)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "wd-control-tool:", err)
-		return exitUsage
-	}
+	// opts.boardValue was already resolved (and validated) by
+	// parseArgs - board.Parse(opts.board) cannot fail again here.
+	b := opts.boardValue
 
 	if len(opts.actions) == 0 {
 		fmt.Fprintln(os.Stderr, "wd-control-tool: at least one of -l/--led, -f/--fan, -r/--rtc, -d/--display is required")

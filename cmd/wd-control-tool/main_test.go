@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -281,6 +282,24 @@ func TestRun_LEDZoneValidationPerBoard(t *testing.T) {
 	}
 }
 
+// Every other led test in this file only ever used "power"/"blue"/
+// "on" (plus "hd2" above) - found via `go test -cover` that hd0/hd1
+// and the off/blink states were never exercised through the CLI at
+// all. Every zone/color/state combination EX4 supports must parse
+// without error under dry-run.
+func TestRun_LEDAllZonesColorsStates(t *testing.T) {
+	for _, zone := range []string{"power", "hd0", "hd1", "hd2", "hd3"} {
+		for _, color := range []string{"red", "blue"} {
+			for _, state := range []string{"off", "on", "blinking", "blink"} {
+				code, out, errOut := captureRun(t, []string{"-b", "ex4", "-n", "-l", zone, color, state})
+				if code != exitOK || !strings.Contains(out, "would") || strings.Contains(out, "would fail") {
+					t.Errorf("%s/%s/%s: code=%d out=%q err=%q", zone, color, state, code, out, errOut)
+				}
+			}
+		}
+	}
+}
+
 func TestParseArgs_AttachedLongForms(t *testing.T) {
 	opts, err := parseArgs([]string{"--board=ex4", "--serial=/dev/ttyS2", "-f", "2"})
 	if err != nil {
@@ -557,4 +576,80 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// Every other test exercises runAction either under -n, or on a path
+// that fails before apply() is ever called (bad args, a nonexistent
+// --serial path) - a REAL action whose apply() actually succeeds had
+// no coverage at all (confirmed via `go test -cover`: the final
+// `return exitOK` after a.apply() succeeds was never hit). Build an
+// action directly (bypassing buildAction/real hardware) to close
+// that gap.
+func TestRunAction_SuccessfulRealRunIsSilentAndOK(t *testing.T) {
+	applied := false
+	a := &action{
+		describe: "do the thing",
+		apply:    func() error { applied = true; return nil },
+	}
+
+	origOut, origErr := os.Stdout, os.Stderr
+	outR, outW, _ := os.Pipe()
+	errR, errW, _ := os.Pipe()
+	os.Stdout, os.Stderr = outW, errW
+	outCh := make(chan string, 1)
+	errCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+	go func() { b, _ := io.ReadAll(errR); errCh <- string(b) }()
+
+	code := runAction(a, false, false)
+
+	outW.Close()
+	errW.Close()
+	os.Stdout, os.Stderr = origOut, origErr
+	out, errOut := <-outCh, <-errCh
+
+	if code != exitOK {
+		t.Errorf("code=%d, want %d", code, exitOK)
+	}
+	if !applied {
+		t.Error("apply() was never called")
+	}
+	if out != "" || errOut != "" {
+		t.Errorf("a successful real run must be silent: out=%q err=%q", out, errOut)
+	}
+}
+
+func TestRunAction_RealRunApplyError(t *testing.T) {
+	a := &action{
+		describe: "do the thing",
+		apply:    func() error { return errors.New("boom") },
+	}
+	code, _, errOut := captureRunAction(t, a, false, false)
+	if code != exitHardwareIO {
+		t.Errorf("code=%d, want %d", code, exitHardwareIO)
+	}
+	if !strings.Contains(errOut, "boom") {
+		t.Errorf("errOut=%q", errOut)
+	}
+}
+
+// captureRunAction mirrors captureRun but drives runAction directly,
+// for tests that need a hand-built *action rather than a full argv.
+func captureRunAction(t *testing.T, a *action, dryRun, debug bool) (code int, stdout, stderr string) {
+	t.Helper()
+	origOut, origErr := os.Stdout, os.Stderr
+	outR, outW, _ := os.Pipe()
+	errR, errW, _ := os.Pipe()
+	os.Stdout, os.Stderr = outW, errW
+	outCh := make(chan string, 1)
+	errCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+	go func() { b, _ := io.ReadAll(errR); errCh <- string(b) }()
+
+	code = runAction(a, dryRun, debug)
+
+	outW.Close()
+	errW.Close()
+	os.Stdout, os.Stderr = origOut, origErr
+	return code, <-outCh, <-errCh
 }
