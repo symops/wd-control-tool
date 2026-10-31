@@ -52,7 +52,8 @@ arm-linux-gnueabihf-readelf -d wd-control-tool-armv7 | grep NEEDED   # expect: o
 ## Test
 
 ```sh
-make test    # go vet + go test ./...
+make test        # go vet + go test ./...
+make test-race   # go vet + go test -race ./... - run before every push, not just this
 ```
 
 Coverage, all without root or real hardware:
@@ -88,10 +89,10 @@ Coverage, all without root or real hardware:
   `os.Pipe`. This caught a third real bug: `-h`/`--help` was writing
   its usage text to stderr instead of stdout.
 
-Run `go test -race ./...` after touching any of the above - the pty
-tests use goroutines (the command runs concurrently with the test
-reading the "wire"), so a race there would be a real concurrency bug,
-not a test artifact.
+Run `make test-race` after touching any of the above - the pty tests
+use goroutines (the command runs concurrently with the test reading
+the "wire"), so a race there would be a real concurrency bug, not a
+test artifact.
 
 No automated test opens a real `/dev/mem` (only the sparse-file
 stand-in) or sends traffic over a real UART to actual hardware - by

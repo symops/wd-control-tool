@@ -9,7 +9,7 @@ PKG     := ./cmd/wd-control-tool
 # touching these flags.
 LDFLAGS := -s -w -linkmode=external
 
-.PHONY: build-ex2u build-ex4 build-ex2 strip verify-deps build-host test clean
+.PHONY: build-ex2u build-ex4 build-ex2 strip verify-deps build-host test test-race clean
 
 # EX2U (and, once its uRamdisk is rebuilt, EX2): Armada 385/370,
 # armv7, hard-float ABI (confirmed: ld-linux-armhf.so.3).
@@ -55,6 +55,16 @@ build-host:
 test:
 	go vet ./...
 	go test ./...
+
+# Several tests (pkg/mcu's pty-based ones especially) run the command
+# under test in a goroutine concurrently with the test reading the
+# "wire" - a race there is a real concurrency bug, not a test
+# artifact. Not folded into the default `test` target because -race
+# roughly doubles run time; run this before every push, not just
+# while iterating locally.
+test-race:
+	go vet ./...
+	go test -race ./...
 
 clean:
 	rm -f $(BINARY) $(BINARY)-armv7 $(BINARY)-armv5
