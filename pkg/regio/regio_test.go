@@ -2,6 +2,7 @@ package regio
 
 import (
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -149,5 +150,44 @@ func TestPageAlign(t *testing.T) {
 		if base != c.wantBase || off != c.wantOff {
 			t.Errorf("pageAlign(0x%x, %d) = (0x%x, %d), want (0x%x, %d)", c.addr, c.pageSize, base, off, c.wantBase, c.wantOff)
 		}
+	}
+}
+
+// Mem's doc comment claims every method (Close included) serializes
+// via its internal mutex, making concurrent use from multiple
+// goroutines safe. Confirm that under `go test -race`: many
+// goroutines hammering WriteReg32/ReadReg32 on a handful of shared
+// addresses, finishing with a concurrent Close from one of them,
+// must never race - if Close ever stopped taking the lock (the bug
+// this test would have caught: it didn't originally), -race would
+// flag the close racing against an in-flight mmap/write.
+func TestMem_ConcurrentAccessIsRaceFree(t *testing.T) {
+	mem := newFakeMem(t, 1<<20)
+
+	addrs := []int64{0x1000, 0x2000, 0x3000, 0x4000}
+	const goroutines = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			addr := addrs[i%len(addrs)]
+			if err := mem.WriteReg32(addr, uint32(i)); err != nil {
+				t.Errorf("WriteReg32: %v", err)
+				return
+			}
+			if _, err := mem.ReadReg32(addr); err != nil {
+				t.Errorf("ReadReg32: %v", err)
+			}
+			if err := mem.SetClearBits(addr, 0x1, 0x2); err != nil {
+				t.Errorf("SetClearBits: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if err := mem.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 }

@@ -18,9 +18,11 @@ import (
 )
 
 // Mem is an open /dev/mem handle with one page mapped at a time.
-// Not safe for concurrent use from multiple goroutines without
-// external locking (matches the vendor pattern: open, map, poke,
-// unmap, close - once per call, not held open).
+// Safe for concurrent use from multiple goroutines: every method
+// (including Close) takes mu, so calls serialize rather than race -
+// not that this project's own CLI ever shares one Mem across
+// goroutines (each action opens and closes its own), but this type
+// is exported and nothing stops a future caller from doing so.
 type Mem struct {
 	mu sync.Mutex
 	f  *os.File
@@ -46,7 +48,11 @@ func Open() (*Mem, error) {
 // a plain file in place of a block device).
 func OpenFile(f *os.File) *Mem { return &Mem{f: f} }
 
-func (m *Mem) Close() error { return m.f.Close() }
+func (m *Mem) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.f.Close()
+}
 
 func pageAlign(addr int64, pageSize int64) (base int64, off int64) {
 	base = addr &^ (pageSize - 1)
