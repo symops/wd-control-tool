@@ -831,3 +831,35 @@ func TestRun_LongActionChainDoesNotMisbehave(t *testing.T) {
 		t.Errorf("200 dry-run actions took %v, want well under 2s (no hardware I/O happens under -n)", elapsed)
 	}
 }
+
+// Every other multi-action test combines at most 2 of the 4 action
+// types. Chain all 4 (led, fan, display, rtc) in one EX4 command and
+// confirm each is correctly described, in order, with the right
+// frame/register detail - the realistic "set everything up on boot"
+// use case this feature exists for.
+func TestRun_AllFourActionTypesChained(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{
+		"-b", "ex4", "-n", "-D",
+		"--led", "power", "blue", "on",
+		"-f", "2",
+		"-d", "Booting...",
+		"-r", "write",
+	})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	ledIdx := strings.Index(out, "set ex4 power blue on")
+	fanIdx := strings.Index(out, "send fan level 2")
+	dispIdx := strings.Index(out, `display text "Booting..."`)
+	rtcIdx := strings.Index(out, "MCU RTC")
+	if ledIdx == -1 || fanIdx == -1 || dispIdx == -1 || rtcIdx == -1 {
+		t.Fatalf("out=%q, missing one of the 4 expected action descriptions", out)
+	}
+	if !(ledIdx < fanIdx && fanIdx < dispIdx && dispIdx < rtcIdx) {
+		t.Errorf("actions not described in the order given: led=%d fan=%d display=%d rtc=%d", ledIdx, fanIdx, dispIdx, rtcIdx)
+	}
+	if !strings.Contains(out, "FA 02 00 02 00 00 FB") { // confirmed FanControl level-2 frame
+		t.Errorf("out=%q, missing the fan frame bytes", out)
+	}
+}
