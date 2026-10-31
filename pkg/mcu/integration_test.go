@@ -2,6 +2,7 @@ package mcu
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,27 @@ func TestEX4_RequestDateAndTime_OverPTY(t *testing.T) {
 	want := []byte{0xFA, 0x01, 0x00, 0x03, 0x01, 0x00, 0xFB}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}
+
+// SetDateAndTime/Display's own error-propagation branch (when the
+// underlying EX4DateTimeFrame/EX4DisplayFrame call fails validation)
+// was only ever exercised by calling those Frame functions directly
+// - never through the methods themselves, which is the path a real
+// caller (rtc.EX4Writer.Set, cmd/main.go) actually uses.
+func TestEX4_SetDateAndTime_PropagatesValidationError(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX4(OpenFile(fake.Slave))
+	if err := m.SetDateAndTime(2026, 13, 1, 0, 0, 0, 0); err == nil { // month 13
+		t.Error("SetDateAndTime with month=13: want error, got nil")
+	}
+}
+
+func TestEX4_Display_PropagatesValidationError(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX4(OpenFile(fake.Slave))
+	if err := m.Display(strings.Repeat("A", 256)); err == nil {
+		t.Error("Display with 256-byte text: want error, got nil")
 	}
 }
 
