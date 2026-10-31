@@ -99,19 +99,28 @@ func arityFor(mode string, b board.Board) int {
 func parseArgs(args []string) (*options, error) {
 	opts := &options{serial: "/dev/ttyS1"}
 
-	// setBoard rejects a second -b/--board with a DIFFERENT value
-	// outright, rather than silently letting the last one win for
-	// every action in the command (including ones a user wrote right
-	// after an earlier, different -b, expecting THAT one to apply -
-	// confirmed confusing in practice: `-b ex2u -f 50 -b ex4 -f 2`
-	// used to apply ex4 to both actions, reporting a baffling
-	// "unsupported fan level 50" for a value that is perfectly valid
-	// on ex2u). Repeating the SAME value is harmless and allowed.
+	// setBoard rejects a second -b/--board that resolves to a
+	// DIFFERENT board outright, rather than silently letting the last
+	// one win for every action in the command (including ones a user
+	// wrote right after an earlier, different -b, expecting THAT one
+	// to apply - confirmed confusing in practice: `-b ex2u -f 50 -b
+	// ex4 -f 2` used to apply ex4 to both actions, reporting a
+	// baffling "unsupported fan level 50" for a value that is
+	// perfectly valid on ex2u). Repeating the same board is harmless
+	// and allowed - including via a DIFFERENT alias of it (`-b ex2u
+	// -b ex2-ultra` is "the same value" semantically even though the
+	// two strings differ byte-for-byte, so this compares the parsed
+	// board.Board, never the raw strings).
 	setBoard := func(flag, value string) error {
-		if opts.board != "" && opts.board != value {
+		parsed, err := board.Parse(value)
+		if err != nil {
+			return err
+		}
+		if opts.board != "" && opts.boardValue != parsed {
 			return fmt.Errorf("%s=%s conflicts with an earlier -b/--board=%s in the same command", flag, value, opts.board)
 		}
 		opts.board = value
+		opts.boardValue = parsed
 		return nil
 	}
 
@@ -132,13 +141,9 @@ func parseArgs(args []string) (*options, error) {
 		}
 	}
 
-	if opts.board != "" {
-		parsed, err := board.Parse(opts.board)
-		if err != nil {
-			return nil, err
-		}
-		opts.boardValue = parsed
-	}
+	// opts.boardValue was already resolved (and validated) by setBoard
+	// above, for every -b/--board occurrence - nothing left to parse
+	// here.
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]

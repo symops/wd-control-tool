@@ -124,6 +124,38 @@ func TestRun_RepeatedSameBoardValueAllowed(t *testing.T) {
 	}
 }
 
+// ex2u and ex2-ultra are two spellings of the exact same board (see
+// board.Parse) - setBoard must compare the *resolved* board.Board,
+// not the raw strings, or this would be wrongly rejected as a
+// conflict even though nothing about which board to use is actually
+// ambiguous.
+func TestRun_RepeatedSameBoardValueAllowed_ViaDifferentAlias(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-b", "ex2-ultra", "-f", "25"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "fan 50%") || !strings.Contains(out, "fan 25%") {
+		t.Errorf("out=%q, want both actions described", out)
+	}
+}
+
+// An unparseable second -b/--board value must be reported as an
+// unknown board, not swallowed into a (misleading) "conflicts with"
+// message - the value itself is invalid regardless of what came
+// before it.
+func TestRun_SecondBoardValueInvalid_ReportsUnknownBoardNotConflict(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-b", "bogus"})
+	if code != exitUsage {
+		t.Errorf("code=%d, want %d; err=%q", code, exitUsage, errOut)
+	}
+	if !strings.Contains(errOut, "unknown board") {
+		t.Errorf("errOut=%q, want it to report the unknown board value", errOut)
+	}
+	if strings.Contains(errOut, "conflicts") {
+		t.Errorf("errOut=%q, should not frame an invalid value as a conflict", errOut)
+	}
+}
+
 // Omitting -b/--board entirely, with a mode flag present, must still
 // be a usage error (there is nothing to resolve led's arity against,
 // and no board to act on regardless).
