@@ -3,6 +3,7 @@ package mcu
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -16,9 +17,17 @@ var baudToTermios = map[int]uint32{
 	115200: unix.B115200,
 }
 
-// Port is a raw, 8N1, no-flow-control serial line to an MCU.
+// Port is a raw, 8N1, no-flow-control serial line to an MCU. Safe
+// for concurrent use: sendBytes and Close both take mu, so two
+// goroutines sending frames on the same Port serialize rather than
+// interleave their bytes mid-frame on the wire - a real hazard this
+// type would otherwise have (found via the same review that caught
+// regio.Mem's Close not taking its own mutex), even though nothing in
+// this project's own CLI currently shares one Port across goroutines
+// (run() dispatches actions sequentially).
 type Port struct {
-	f *os.File
+	mu sync.Mutex
+	f  *os.File
 }
 
 // Open configures path (e.g. /dev/ttyS1, or uart1's tty node on EX2U)
@@ -60,14 +69,23 @@ func Open(path string, baud int) (*Port, error) {
 // MCU on the other end of a PTY pair.
 func OpenFile(f *os.File) *Port { return &Port{f: f} }
 
-func (p *Port) Close() error { return p.f.Close() }
+func (p *Port) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.f.Close()
+}
 
 // sendBytes writes b one byte at a time with the given inter-byte
 // pacing, matching the vendor daemons' own transmit loop (see
 // SPEC.md: EX2U uses ~100ms mdelay-style pacing; EX2/EX4's
 // up_send_daemon used usleep(10us), which is negligible next to the
 // UART's own bit time - but it is reproduced here for parity).
+// Holds mu for the whole frame (including the inter-byte sleeps), so
+// a concurrent sender's frame can only start after this one's FB (or
+// equivalent end byte) has gone out, never interleaved with it.
 func (p *Port) sendBytes(b []byte, pace func()) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for _, c := range b {
 		if _, err := p.f.Write([]byte{c}); err != nil {
 			return fmt.Errorf("mcu: write: %w", err)
