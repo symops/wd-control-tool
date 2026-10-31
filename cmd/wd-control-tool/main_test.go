@@ -222,6 +222,37 @@ func TestRun_MultipleActions_SecondActionUnsupportedStopsChain(t *testing.T) {
 	}
 }
 
+// Same scenario as TestRun_MultipleActions_SecondActionUnsupportedStopsChain,
+// but for a REAL (non-dry-run) run: confirms the first action's
+// hardware write actually went out over the wire before the second
+// action's hard "not supported" error stops the chain - the first
+// action is NOT rolled back or held back pending validation of the
+// rest of the chain. This is the real-world version of what README's
+// "the first one that fails stops the rest" means: later actions
+// never run, but an earlier one that already succeeded stays
+// applied. Worth pinning explicitly since "unsupported on this
+// board" is a purely static, pre-flight-checkable condition (unlike
+// a hardware I/O error, which genuinely can only be discovered by
+// trying) - a reader could otherwise assume the whole chain is
+// validated before anything is touched.
+func TestRun_MultipleActions_EarlierActionAlreadyAppliedBeforeLaterUnsupportedStopsChain(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-f", "50", "-r", "write"})
+	if code != exitUnsupported {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	if !strings.Contains(errOut, "rtc is not supported") {
+		t.Errorf("errOut=%q", errOut)
+	}
+
+	got := fake.ReadFrame(t, 7, 2*time.Second)
+	want := []byte{0xFA, 0x02, 0x00, 0x80, 0x00, 0x00, 0xFB} // EX2U fan 50% (0x80)
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X (the fan action should have actually run before rtc's unsupported error stopped the chain)", got, want)
+	}
+}
+
 func TestRun_RepeatedModeFlagAllowed(t *testing.T) {
 	// Chaining the same mode twice is allowed (e.g. two fan levels in
 	// sequence) - nothing in the new grammar needs to forbid it.
