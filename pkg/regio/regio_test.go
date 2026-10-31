@@ -191,3 +191,40 @@ func TestMem_ConcurrentAccessIsRaceFree(t *testing.T) {
 		t.Errorf("Close: %v", err)
 	}
 }
+
+// SetClearBits does ReadReg32 then WriteReg32 - if each merely took
+// mu independently (released between the two), two concurrent
+// SetClearBits calls on the SAME address could still interleave:
+// both read the same starting value before either writes, so the
+// second write silently overwrites the first's bit (a classic
+// read-modify-write lost update) even though neither individual
+// Read/Write call ever raced in the `go test -race` sense. Have N
+// goroutines each set one DISTINCT bit on a shared register with no
+// artificial delay - real syscall overhead in mapRegister's
+// mmap/munmap is enough to open the window on a multi-core machine -
+// and confirm every single bit survives.
+func TestMem_SetClearBits_ConcurrentDistinctBitsAllSurvive(t *testing.T) {
+	mem := newFakeMem(t, 1<<20)
+	const addr = 0x5000
+	const n = 32
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for bit := 0; bit < n; bit++ {
+		go func(bit uint32) {
+			defer wg.Done()
+			if err := mem.SetClearBits(addr, 1<<bit, 0); err != nil {
+				t.Errorf("SetClearBits(bit %d): %v", bit, err)
+			}
+		}(uint32(bit))
+	}
+	wg.Wait()
+
+	got, err := mem.ReadReg32(addr)
+	if err != nil {
+		t.Fatalf("ReadReg32: %v", err)
+	}
+	if got != 0xFFFFFFFF {
+		t.Errorf("after %d goroutines each setting one distinct bit: got 0x%08x, want 0xFFFFFFFF (missing bits: 0x%08x - SetClearBits' read-modify-write wasn't atomic)", n, got, ^got)
+	}
+}

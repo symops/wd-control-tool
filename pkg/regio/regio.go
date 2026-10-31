@@ -88,7 +88,10 @@ func (m *Mem) mapRegister(addr int64) (data []byte, off int64, cleanup func(), e
 func (m *Mem) ReadReg32(addr int64) (uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.readReg32Locked(addr)
+}
 
+func (m *Mem) readReg32Locked(addr int64) (uint32, error) {
 	data, off, cleanup, err := m.mapRegister(addr)
 	if err != nil {
 		return 0, err
@@ -104,7 +107,10 @@ func (m *Mem) ReadReg32(addr int64) (uint32, error) {
 func (m *Mem) WriteReg32(addr int64, v uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.writeReg32Locked(addr, v)
+}
 
+func (m *Mem) writeReg32Locked(addr int64, v uint32) error {
 	data, off, cleanup, err := m.mapRegister(addr)
 	if err != nil {
 		return err
@@ -122,14 +128,34 @@ func (m *Mem) WriteReg32(addr int64, v uint32) error {
 // clear every bit in clear (set is applied first, matching the
 // vendor LED handlers' own "clear the other color, then set/clear
 // mine" ordering - see SPEC.md).
+//
+// Holds mu across BOTH the read and the write, not just each
+// individually (via the unexported *Locked helpers, which assume the
+// caller already holds mu) - otherwise two concurrent SetClearBits
+// calls on the SAME address could both read the same starting value
+// before either writes, and the second write would silently
+// overwrite the first's bit (a classic read-modify-write lost
+// update). That failure mode doesn't show up under `go test -race`
+// at all - each individual ReadReg32/WriteReg32 call is still
+// correctly mutex-protected in isolation, only the two-call sequence
+// as a whole isn't atomic - and was confirmed to reproduce reliably
+// (not just in theory) by
+// TestMem_SetClearBits_ConcurrentDistinctBitsAllSurvive before this
+// fix: 32 goroutines each setting one distinct bit on a shared
+// register, with no artificial delay, consistently lost several bits
+// to this race. Same root cause and same fix shape as mcu.Port's
+// sendBytes holding its lock for a whole frame, not per byte.
 func (m *Mem) SetClearBits(addr int64, set, clear uint32) error {
-	v, err := m.ReadReg32(addr)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	v, err := m.readReg32Locked(addr)
 	if err != nil {
 		return err
 	}
 	v |= set
 	v &^= clear
-	return m.WriteReg32(addr, v)
+	return m.writeReg32Locked(addr, v)
 }
 
 // Write is one planned register read-modify-write - the pure,
