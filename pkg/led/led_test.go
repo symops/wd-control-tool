@@ -98,6 +98,38 @@ func TestSet_HDBayLED_ZonesAreIndependent(t *testing.T) {
 	}
 }
 
+// HD-bay zones currently honor only ONE color's bit (see hdBayBit's
+// doc comment: the blue/activity channel's real register is
+// unconfirmed, so this intentionally reuses the confirmed bit for
+// both colors as a best-effort pending that confirmation). Pin this
+// explicitly so a future change can't silently start honoring color
+// there (which would be a real behavior change, deserving its own
+// deliberate commit) without a test failing to call it out, and so a
+// future SPEC.md confirmation of the real blue bit has an obvious
+// test to go update.
+func TestPlan_HDBayColorIsCurrentlyIgnored(t *testing.T) {
+	for _, zone := range []Zone{HD0, HD1, HD2, HD3} {
+		for _, state := range []State{On, Off, Blinking} {
+			red, err := Plan(zone, Red, state)
+			if err != nil {
+				t.Fatalf("Plan(%v, Red, %v): %v", zone, state, err)
+			}
+			blue, err := Plan(zone, Blue, state)
+			if err != nil {
+				t.Fatalf("Plan(%v, Blue, %v): %v", zone, state, err)
+			}
+			if len(red) != len(blue) {
+				t.Fatalf("Plan(%v, Red, %v) = %d writes, Plan(%v, Blue, %v) = %d writes - want equal counts", zone, state, len(red), zone, state, len(blue))
+			}
+			for i := range red {
+				if red[i] != blue[i] {
+					t.Errorf("Plan(%v, Red, %v)[%d] = %+v, Plan(%v, Blue, %v)[%d] = %+v - want identical (color currently ignored for HD bays)", zone, state, i, red[i], zone, state, i, blue[i])
+				}
+			}
+		}
+	}
+}
+
 func TestSet_HDBayLED(t *testing.T) {
 	mem := fakeregio.New(t)
 
