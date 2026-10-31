@@ -731,6 +731,30 @@ func TestArityFor(t *testing.T) {
 	}
 }
 
+// buildAction's default case is an unreachable-in-practice panic:
+// parseArgs only ever calls it with a mode string that came from
+// modeNameFor, which only ever returns "fan"/"led"/"display"/"rtc"
+// (or ""), so every real caller already has a valid mode by
+// construction. "Unreachable in practice" isn't the same as
+// "unreachable in fact" - if a future edit to parseArgs/modeNameFor
+// ever let a different string through, this is the loud, documented
+// invariant that should catch it rather than silently misbehave.
+// Confirm it actually panics (with a useful message), by calling it
+// directly - same package, so this doesn't need parseArgs' own
+// guarantees to hold.
+func TestBuildAction_PanicsOnUnknownMode(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("buildAction(..., \"bogus\", ...): want a panic, got none")
+		}
+		if msg, ok := r.(string); !ok || !strings.Contains(msg, "bogus") {
+			t.Errorf("panic value = %v, want a message mentioning the unknown mode", r)
+		}
+	}()
+	buildAction(board.EX4, "bogus", "/dev/ttyS1", nil)
+}
+
 // Short and long forms of every flag must parse identically - a
 // future edit to one spelling's case in parseArgs shouldn't be able
 // to silently diverge from the other.
