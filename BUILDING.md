@@ -73,13 +73,33 @@ Coverage, all without root or real hardware:
   matching what `mcu.Open` always does for a real UART.
 - Register read/modify/write tests against a sparse temp file
   standing in for `/dev/mem` (`test/fakeregio`, used from
-  `pkg/led/led_test.go` and `pkg/fan/ex2_test.go`): `pkg/regio`'s real
-  mmap-based code runs unmodified against the fake backing file.
+  `pkg/led/led_test.go`, `pkg/fan/ex2_test.go` and directly in
+  `pkg/regio/regio_test.go`): `pkg/regio`'s real mmap-based code runs
+  unmodified against the fake backing file. This caught a second real
+  bug: `ReadReg32`/`WriteReg32` originally mmap'd exactly one page, so
+  a register whose 4 bytes straddle a page boundary (nothing about a
+  physical address guarantees it won't) paniced with an out-of-range
+  slice index instead of working or returning an error. None of this
+  tool's current registers happen to straddle a boundary, so this
+  would only have bitten a future register address - fixed by always
+  mapping 2 pages (see `mapRegister` in `pkg/regio/regio.go`).
+- CLI-level tests (`cmd/wd-control-tool/main_test.go`) drive `run()`
+  and `parseArgs()` directly, with stdout/stderr captured via
+  `os.Pipe`. This caught a third real bug: `-h`/`--help` was writing
+  its usage text to stderr instead of stdout.
 
 Run `go test -race ./...` after touching any of the above - the pty
 tests use goroutines (the command runs concurrently with the test
 reading the "wire"), so a race there would be a real concurrency bug,
 not a test artifact.
+
+No automated test opens a real `/dev/mem` (only the sparse-file
+stand-in) or sends traffic over a real UART to actual hardware - by
+design, this suite proves the tool's own logic (frame bytes, register
+math, CLI parsing/validation/exit codes) is correct, not that the
+real MCU or SoC behaves as SPEC.md describes. That still needs real
+hardware (see the project's "на реальном железе посмотим потом" note
+- real-hardware verification is a separate, later step).
 
 ## What this does NOT cover
 

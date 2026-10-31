@@ -255,3 +255,96 @@ func TestParseArgs_MissingValueForBoardOrSerial(t *testing.T) {
 		t.Error("want error for --serial with no value")
 	}
 }
+
+func TestRun_EmptyArgs(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{})
+	if code != exitUsage || !strings.Contains(errOut, "-b/--board") {
+		t.Errorf("no args: code=%d err=%q", code, errOut)
+	}
+}
+
+// -c with zero arguments following it is distinct from -c never
+// appearing at all (commandGiven=true, cmdArgs=[]string{}) - every
+// mode here needs at least one argument, so this must still be a
+// wrong-arg-count usage error, not silently treated as "-c missing".
+func TestRun_CommandWithZeroTrailingArgs(t *testing.T) {
+	cases := [][]string{
+		{"-b", "ex4", "-f", "-c"},
+		{"-b", "ex4", "-r", "-c"},
+		{"-b", "ex4", "-d", "-c"},
+		{"-b", "ex4", "-l", "-c"},
+		{"-b", "ex2u", "-l", "-c"},
+	}
+	for _, args := range cases {
+		code, _, errOut := captureRun(t, args)
+		if code != exitUsage {
+			t.Errorf("%v: code=%d, want %d; err=%q", args, code, exitUsage, errOut)
+		}
+	}
+}
+
+func TestRun_LEDWrongArgCountPerBoard(t *testing.T) {
+	// EX2U's led takes exactly 1 argument (a state), not 3.
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-l", "-c", "power", "blue", "on"})
+	if code != exitUsage {
+		t.Errorf("ex2u led with 3 args: code=%d err=%q", code, errOut)
+	}
+	// EX2/EX4's led takes exactly 3 arguments, not 1.
+	code, _, errOut = captureRun(t, []string{"-b", "ex4", "-l", "-c", "breathing"})
+	if code != exitUsage {
+		t.Errorf("ex4 led with 1 arg: code=%d err=%q", code, errOut)
+	}
+}
+
+func TestRun_RTCWrongSubcommand(t *testing.T) {
+	// Only "write" is a recognized rtc subcommand right now (no read
+	// support - see SPEC.md); anything else is a usage error on every
+	// board, dry-run or not, since it's a malformed command, not a
+	// "would fail" semantic case.
+	for _, bad := range []string{"read", "sync", "WRITE", ""} {
+		code, _, errOut := captureRun(t, []string{"-b", "ex4", "-r", "-n", "-c", bad})
+		if code != exitUsage {
+			t.Errorf("rtc %q: code=%d err=%q, want %d", bad, code, errOut, exitUsage)
+		}
+	}
+}
+
+func TestRun_FanNonNumericLevel(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "-n", "-c", "fifty"})
+	if code != exitUsage {
+		t.Errorf("code=%d, want %d (non-numeric level is a usage error even under -n)", code, exitUsage)
+	}
+	if !strings.Contains(errOut, "integer") {
+		t.Errorf("err=%q", errOut)
+	}
+}
+
+func TestRun_FanUnsupportedBoard(t *testing.T) {
+	// board.Parse only accepts ex2u/ex2/ex4, so there is no board
+	// value that reaches buildFanAction's "default: unsupported"
+	// branch today - this documents that every currently-parseable
+	// board supports fan, and pins buildFanAction's behavior should a
+	// fourth board ever be added without updating it.
+	for _, b := range []string{"ex2u", "ex2", "ex4"} {
+		code, _, errOut := captureRun(t, []string{"-b", b, "-f", "-n", "-c", "0"})
+		if code != exitOK {
+			t.Errorf("board %s fan 0: code=%d err=%q", b, code, errOut)
+		}
+	}
+}
+
+func TestRun_DebugAloneWithoutDryRunStillExecutesDescribeOnly(t *testing.T) {
+	// -D without -n on a "would fail" case must still report the
+	// failure (not silently swallow it because debug lines were
+	// printed first).
+	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "-D", "-c", "42"})
+	if code != exitUsage {
+		t.Errorf("code=%d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(out, "debug:") {
+		t.Errorf("out=%q, want debug lines to still print", out)
+	}
+	if !strings.Contains(errOut, "unsupported fan level") {
+		t.Errorf("errOut=%q", errOut)
+	}
+}

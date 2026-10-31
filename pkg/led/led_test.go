@@ -63,6 +63,40 @@ func TestSet_PowerLED(t *testing.T) {
 	}
 }
 
+// Unlike the power LED's two colors, HD-bay zones have no known
+// "other bit" to clear (see hdBayBit's doc comment) - turning one bay
+// on must NOT affect a different bay's bit.
+func TestSet_HDBayLED_ZonesAreIndependent(t *testing.T) {
+	mem := fakeregio.New(t)
+
+	if err := Set(mem, HD0, Red, On); err != nil {
+		t.Fatalf("Set HD0 red on: %v", err)
+	}
+	if err := Set(mem, HD2, Red, Blinking); err != nil {
+		t.Fatalf("Set HD2 red blinking: %v", err)
+	}
+
+	got := mustRead(t, mem, hdBayDataOut)
+	wantBits := uint32(1<<13 | 1<<15) // HD0's on-bit + HD2's on-bit (blinking also sets DataOut)
+	if got != wantBits {
+		t.Errorf("DataOut = 0x%x, want 0x%x (HD0 and HD2 both set, HD1/HD3 untouched)", got, wantBits)
+	}
+
+	gotBlink := mustRead(t, mem, hdBayBlinkEn)
+	if gotBlink != 1<<15 {
+		t.Errorf("BlinkEn = 0x%x, want 0x%x (only HD2 blinking)", gotBlink, uint32(1<<15))
+	}
+
+	// Turning HD0 off must not touch HD2's bits.
+	if err := Set(mem, HD0, Red, Off); err != nil {
+		t.Fatalf("Set HD0 red off: %v", err)
+	}
+	got = mustRead(t, mem, hdBayDataOut)
+	if got != 1<<15 {
+		t.Errorf("after HD0 off: DataOut = 0x%x, want 0x%x (only HD2 left set)", got, uint32(1<<15))
+	}
+}
+
 func TestSet_HDBayLED(t *testing.T) {
 	mem := fakeregio.New(t)
 

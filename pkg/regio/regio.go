@@ -54,20 +54,40 @@ func pageAlign(addr int64, pageSize int64) (base int64, off int64) {
 	return
 }
 
+// mapRegister mmaps enough pages to safely access the 4 bytes at
+// addr and returns the mapping plus addr's offset within it. addr is
+// not guaranteed to be far from a page boundary - nothing about a
+// physical register's address implies that - so a register's 4 bytes
+// can straddle into the next page. off (addr's offset within a single
+// page) is always in [0, pageSize), so off+4 never exceeds
+// pageSize+3: mapping 2 pages unconditionally is always enough and
+// keeps this simple, at the cost of mapping one page more than
+// strictly needed in the common case. A single-page mmap here was
+// this function's original design and would panic with an
+// out-of-range slice index for a straddling register - caught by
+// pkg/regio_test.go's TestReadWriteReg32_PageBoundaryStraddle.
+func (m *Mem) mapRegister(addr int64) (data []byte, off int64, cleanup func(), err error) {
+	pageSize := int64(os.Getpagesize())
+	base, off := pageAlign(addr, pageSize)
+
+	data, err = unix.Mmap(int(m.f.Fd()), base, int(2*pageSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("regio: mmap 0x%x: %w", addr, err)
+	}
+	return data, off, func() { unix.Munmap(data) }, nil
+}
+
 // ReadReg32 reads one little-endian 32-bit word at physical address
 // addr.
 func (m *Mem) ReadReg32(addr int64) (uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	pageSize := int64(os.Getpagesize())
-	base, off := pageAlign(addr, pageSize)
-
-	data, err := unix.Mmap(int(m.f.Fd()), base, int(pageSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	data, off, cleanup, err := m.mapRegister(addr)
 	if err != nil {
-		return 0, fmt.Errorf("regio: mmap 0x%x: %w", addr, err)
+		return 0, err
 	}
-	defer unix.Munmap(data)
+	defer cleanup()
 
 	v := uint32(data[off]) | uint32(data[off+1])<<8 | uint32(data[off+2])<<16 | uint32(data[off+3])<<24
 	return v, nil
@@ -79,14 +99,11 @@ func (m *Mem) WriteReg32(addr int64, v uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	pageSize := int64(os.Getpagesize())
-	base, off := pageAlign(addr, pageSize)
-
-	data, err := unix.Mmap(int(m.f.Fd()), base, int(pageSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	data, off, cleanup, err := m.mapRegister(addr)
 	if err != nil {
-		return fmt.Errorf("regio: mmap 0x%x: %w", addr, err)
+		return err
 	}
-	defer unix.Munmap(data)
+	defer cleanup()
 
 	data[off] = byte(v)
 	data[off+1] = byte(v >> 8)

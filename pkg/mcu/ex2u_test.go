@@ -3,31 +3,53 @@ package mcu
 import (
 	"bytes"
 	"testing"
+	"time"
+
+	"github.com/symops/wd-control-tool/test/fakemcu"
 )
 
 // Golden-byte tests for EX2U's protocol - this one is hardware-
 // confirmed (live strace capture + end-to-end kernel driver test),
 // the strongest evidence in this whole codebase. See SPEC.md.
-
+//
+// These call the REAL methods over a real pty (test/fakemcu), not
+// two hardcoded byte slices compared against each other - an earlier
+// version of this test did exactly that and was nearly tautological
+// (it only actually exercised the ex2uStart/ex2uEnd constants, not
+// any of send()'s real behavior). This version also covers
+// SysReady/SysSilent/SysShutdown/TempRaw, which had no coverage at
+// all before - not even a trivial one.
 func TestEX2UFrames(t *testing.T) {
 	cases := []struct {
 		name string
-		got  []byte
+		call func(m *EX2U) error
 		want []byte
 	}{
-		{"led_set_on", []byte{ex2uStart, 0x03, 0x06, 0x01, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x06, 0x01, 0x00, 0x00, 0xFB}},
-		{"led_set_off", []byte{ex2uStart, 0x03, 0x06, 0x00, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x06, 0x00, 0x00, 0x00, 0xFB}},
-		{"led_blink", []byte{ex2uStart, 0x03, 0x06, 0x02, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x06, 0x02, 0x00, 0x00, 0xFB}},
-		{"led_breath", []byte{ex2uStart, 0x03, 0x06, 0x04, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x06, 0x04, 0x00, 0x00, 0xFB}},
-		{"sys_ready", []byte{ex2uStart, 0x03, 0x01, 0x00, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x01, 0x00, 0x00, 0x00, 0xFB}},
-		{"sys_silent", []byte{ex2uStart, 0x03, 0x03, 0x00, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x03, 0x00, 0x00, 0x00, 0xFB}},
-		{"sys_shutdown", []byte{ex2uStart, 0x03, 0x03, 0x01, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x03, 0x03, 0x01, 0x00, 0x00, 0xFB}},
-		{"fan_set_50", []byte{ex2uStart, 0x02, 0x00, 0x80, 0x00, 0x00, ex2uEnd}, []byte{0xFA, 0x02, 0x00, 0x80, 0x00, 0x00, 0xFB}},
+		{"LEDOn", (*EX2U).LEDOn, []byte{0xFA, 0x03, 0x06, 0x01, 0x00, 0x00, 0xFB}},
+		{"LEDOff", (*EX2U).LEDOff, []byte{0xFA, 0x03, 0x06, 0x00, 0x00, 0x00, 0xFB}},
+		{"LEDBlink", (*EX2U).LEDBlink, []byte{0xFA, 0x03, 0x06, 0x02, 0x00, 0x00, 0xFB}},
+		{"LEDBreathe", (*EX2U).LEDBreathe, []byte{0xFA, 0x03, 0x06, 0x04, 0x00, 0x00, 0xFB}},
+		{"SysReady", (*EX2U).SysReady, []byte{0xFA, 0x03, 0x01, 0x00, 0x00, 0x00, 0xFB}},
+		{"SysSilent", (*EX2U).SysSilent, []byte{0xFA, 0x03, 0x03, 0x00, 0x00, 0x00, 0xFB}},
+		{"SysShutdown", (*EX2U).SysShutdown, []byte{0xFA, 0x03, 0x03, 0x01, 0x00, 0x00, 0xFB}},
+		{"TempRaw", (*EX2U).TempRaw, []byte{0xFA, 0x03, 0x08, 0x00, 0x00, 0x00, 0xFB}},
 	}
 	for _, c := range cases {
-		if !bytes.Equal(c.got, c.want) {
-			t.Errorf("%s = % X, want % X", c.name, c.got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			fake := fakemcu.New(t)
+			m := NewEX2U(OpenFile(fake.Slave))
+
+			done := make(chan error, 1)
+			go func() { done <- c.call(m) }()
+
+			got := fake.ReadFrame(t, len(c.want), 3*time.Second)
+			if err := <-done; err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("%s wire bytes = % X, want % X", c.name, got, c.want)
+			}
+		})
 	}
 }
 
