@@ -138,6 +138,26 @@ func TestRun_MultipleActions_FailFastOnRealRun(t *testing.T) {
 	}
 }
 
+// Same fail-fast idea, but the SECOND action is the one that's wrong
+// (a hard "unsupported on this board" error, not a planErr "would
+// fail") - and this time under -n, since dry-run is unaffected by
+// hard usage/unsupported errors the same way it neutralizes planErr.
+// The first action must still have been described before the second
+// one's hard error stops everything with the second action's own
+// exit code (2), not the first action's (which would be 0).
+func TestRun_MultipleActions_SecondActionUnsupportedStopsChain(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-r", "write"})
+	if code != exitUnsupported {
+		t.Errorf("code=%d, want %d; out=%q err=%q", code, exitUnsupported, out, errOut)
+	}
+	if !strings.Contains(out, "would send fan 50%") {
+		t.Errorf("out=%q, want the first action to have been described before the second one's hard error", out)
+	}
+	if !strings.Contains(errOut, "rtc is not supported") {
+		t.Errorf("errOut=%q", errOut)
+	}
+}
+
 func TestRun_RepeatedModeFlagAllowed(t *testing.T) {
 	// Chaining the same mode twice is allowed (e.g. two fan levels in
 	// sequence) - nothing in the new grammar needs to forbid it.
