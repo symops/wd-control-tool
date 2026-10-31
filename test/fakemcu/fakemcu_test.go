@@ -51,6 +51,34 @@ func TestReadExactly_PartialThenMoreData(t *testing.T) {
 	}
 }
 
+// readExactly's error path (as opposed to its timeout path, covered
+// below) had no test: if the reader fails outright - here, the write
+// side closes after only a partial write, so the next Read returns
+// io.ErrClosedPipe before n bytes ever arrive - that error must come
+// back promptly, not be swallowed into (or confused with) a generic
+// timeout after waiting out the full duration.
+func TestReadExactly_ReaderErrorPropagatesPromptly(t *testing.T) {
+	r, w := io.Pipe()
+	defer r.Close()
+
+	go func() {
+		w.Write([]byte{0x01}) // only 1 of the 3 bytes readExactly wants
+		w.Close()
+	}()
+
+	const timeout = 5 * time.Second
+	start := time.Now()
+	_, err := readExactly(r, 3, timeout)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("readExactly: want an error (closed pipe before enough data arrived), got nil")
+	}
+	if elapsed > time.Second {
+		t.Errorf("readExactly took %v to report the reader error, want well under the %v timeout (it shouldn't need to wait that out at all)", elapsed, timeout)
+	}
+}
+
 // The actual regression test: nothing is ever written, so this must
 // return an error close to `timeout`, not hang indefinitely (an
 // earlier SetReadDeadline-based version of this package's ReadFrame
