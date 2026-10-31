@@ -503,6 +503,20 @@ func TestRun_LEDMultipleInvalidFields_ZoneErrorWins(t *testing.T) {
 	}
 }
 
+// Completes the priority chain: with a VALID zone but both color and
+// state invalid, the color error must win (buildLEDAction checks
+// zone, then color, then state, each only overwriting err if it was
+// still nil).
+func TestRun_LEDMultipleInvalidFields_ColorErrorWinsOverState(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-l", "power", "badcolor", "badstate"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, `unknown led color "badcolor"`) {
+		t.Errorf("out=%q, want the color error specifically", out)
+	}
+}
+
 func TestModeNameFor(t *testing.T) {
 	cases := map[string]string{
 		"-l": "led", "--led": "led",
