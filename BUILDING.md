@@ -111,7 +111,7 @@ Coverage, all without root or real hardware:
   `shutdownFamily`, `EX4DisplayFrame`'s LEN byte - see git history)
   all came from the same root cause: a value landing directly in a
   wire frame without being checked against the frame's own FA/FB
-  markers. `make fuzz` runs five native Go fuzz tests, each clean for
+  markers. `make fuzz` runs six native Go fuzz tests, each clean for
   millions of executions:
   - `FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload`
     (`pkg/mcu/legacy_test.go`) formalizes the frame-marker-collision
