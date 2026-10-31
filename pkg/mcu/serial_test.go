@@ -1,12 +1,33 @@
 package mcu
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/symops/wd-control-tool/test/fakemcu"
 )
+
+// sendBytes' write-error branch had no coverage at all (confirmed via
+// `go test -coverpkg`) - every other test sends into a live, open pty
+// that always accepts the write. Close the underlying file out from
+// under the Port first, so the very first byte's Write fails, and
+// confirm the error is propagated (wrapped with context) rather than
+// silently swallowed.
+func TestPort_SendBytes_WriteErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+	fake.Slave.Close() // underlying fd now invalid for Write
+
+	err := p.sendBytes([]byte{0xAA, 0xBB, 0xCC}, nil)
+	if err == nil {
+		t.Fatal("sendBytes on a closed file: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "mcu: write:") {
+		t.Errorf("sendBytes error = %q, want it wrapped with \"mcu: write:\" context", err.Error())
+	}
+}
 
 // Port.sendBytes holds mu for the whole frame specifically so two
 // goroutines sending on the same Port can't interleave their bytes
