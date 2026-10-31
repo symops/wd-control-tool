@@ -126,6 +126,12 @@ Coverage, all without root or real hardware:
     values outside their declared constants (legal in Go - these are
     plain int-based types) never panic and never produce a register
     write to an address outside the small known set.
+  - `FuzzEX2ULEDFrame_NeverPanics` (`pkg/mcu/ex2u_test.go`) throws
+    arbitrary strings (long, unicode, embedded NUL/control bytes) at
+    the one function in this codebase that takes free-form,
+    CLI-user-supplied text without a length check of its own
+    (EX2U's status LED only ever sends a fixed 7-byte frame
+    regardless of the input string).
 - End-to-end tests (`cmd/wd-control-tool/e2e_test.go`) build the real
   binary once and exec it for a few cases, closing the one remaining
   gap everything else leaves: `main()`'s own `os.Exit(run(...))` and

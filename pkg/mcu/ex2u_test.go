@@ -119,3 +119,28 @@ func TestEX2ULEDFrame_RejectsUnknownState(t *testing.T) {
 		}
 	}
 }
+
+// EX2ULEDFrame takes a free-form string (ultimately CLI-user-
+// supplied) - confirm it never panics regardless of content (very
+// long strings, unicode, embedded NUL/control bytes, ...) and that
+// whenever it DOES accept a value, the result is always exactly the
+// 7-byte fixed frame this protocol uses (never, say, a length based
+// on the input string's own size, the way EX4DisplayFrame's LEN byte
+// legitimately varies).
+func FuzzEX2ULEDFrame_NeverPanics(f *testing.F) {
+	for _, seed := range []string{"on", "off", "blinking", "breathing", "", "ON", "\x00", "🔥"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, state string) {
+		frame, err := EX2ULEDFrame(state)
+		if err != nil {
+			if frame != nil {
+				t.Fatalf("EX2ULEDFrame(%q): non-nil frame alongside an error", state)
+			}
+			return
+		}
+		if len(frame) != 7 {
+			t.Fatalf("EX2ULEDFrame(%q) = % X, want exactly 7 bytes", state, frame)
+		}
+	})
+}
