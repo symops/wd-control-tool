@@ -2,6 +2,7 @@ package mcu
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -168,7 +169,10 @@ func TestEX4DateTimeFrame_NegativeDowNeverProducesFrameMarkerByte(t *testing.T) 
 }
 
 func TestEX4DisplayFrame(t *testing.T) {
-	got := EX4DisplayFrame("Booting...")
+	got, err := EX4DisplayFrame("Booting...")
+	if err != nil {
+		t.Fatalf("EX4DisplayFrame: %v", err)
+	}
 	want := buildTextFrame(ex4SysName, "Booting...")
 	if !bytes.Equal(got, want) {
 		t.Errorf("EX4DisplayFrame = % X, want % X", got, want)
@@ -179,18 +183,48 @@ func TestEX4DisplayFrame_EmptyAndLongText(t *testing.T) {
 	// Empty text: LEN=0, no payload bytes - the protocol itself
 	// places no lower bound (see SPEC.md: no truncation/padding at
 	// this layer at all).
-	if got := EX4DisplayFrame(""); !bytes.Equal(got, []byte{0xFA, 0x04, 0x01, 0x00, 0x00, 0xFB}) {
+	got, err := EX4DisplayFrame("")
+	if err != nil {
+		t.Fatalf("EX4DisplayFrame(\"\"): %v", err)
+	}
+	if !bytes.Equal(got, []byte{0xFA, 0x04, 0x01, 0x00, 0x00, 0xFB}) {
 		t.Errorf("EX4DisplayFrame(\"\") = % X", got)
 	}
 
 	// A string longer than the vendor's own 16-char LCD convention -
 	// confirming (again) that this layer does not truncate.
 	long := "This is a a much longer status line than the LCD's own 16-char convention"
-	got := EX4DisplayFrame(long)
+	got, err = EX4DisplayFrame(long)
+	if err != nil {
+		t.Fatalf("EX4DisplayFrame(long): %v", err)
+	}
 	if len(got) != len(long)+6 {
 		t.Errorf("EX4DisplayFrame(long): len = %d, want %d", len(got), len(long)+6)
 	}
 	if got[4] != byte(len(long)) {
 		t.Errorf("EX4DisplayFrame(long): LEN byte = %d, want %d", got[4], len(long))
+	}
+}
+
+// The real bug: byte(len(text)) silently wraps for text 256 bytes or
+// longer (byte(256) == 0), which would make the frame's LEN field lie
+// about a 0-byte payload while still appending all 256+ real text
+// bytes before FB - confirmed by actually computing byte(256), not
+// just by reading the formula. 255 is the last length that still
+// fits in one byte and must still work; 256 must be rejected, not
+// silently produce a wrong-but-plausible-looking LEN byte.
+func TestEX4DisplayFrame_LengthBoundary(t *testing.T) {
+	text255 := strings.Repeat("A", 255)
+	got, err := EX4DisplayFrame(text255)
+	if err != nil {
+		t.Fatalf("EX4DisplayFrame(255 bytes): %v", err)
+	}
+	if got[4] != 0xFF {
+		t.Errorf("EX4DisplayFrame(255 bytes): LEN byte = 0x%02X, want 0xFF", got[4])
+	}
+
+	text256 := strings.Repeat("A", 256)
+	if _, err := EX4DisplayFrame(text256); err == nil {
+		t.Error("EX4DisplayFrame(256 bytes): want error (LEN byte would wrap to 0), got nil")
 	}
 }

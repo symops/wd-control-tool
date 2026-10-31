@@ -441,10 +441,11 @@ func buildDisplayAction(b board.Board, serialPath string, args []string) (*actio
 		return unsupportedErr("board %v has no display", b)
 	}
 	text := args[0]
-	frame := mcu.EX4DisplayFrame(text)
+	frame, ferr := mcu.EX4DisplayFrame(text)
 	return &action{
 		describe:   fmt.Sprintf("send display text %q to EX4 MCU (%s)", text, serialPath),
-		debugLines: frameDebugLines(nil, frame, serialPath, 19200),
+		debugLines: frameDebugLines(ferr, frame, serialPath, 19200),
+		planErr:    ferr,
 		apply: func() error {
 			p, err := mcu.Open(serialPath, 19200)
 			if err != nil {

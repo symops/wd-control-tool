@@ -111,14 +111,30 @@ func (m *EX4) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
 
 // EX4DisplayFrame builds SysName's frame without sending it. The
 // protocol does not truncate or wrap - see buildTextFrame's doc
-// comment.
-func EX4DisplayFrame(text string) []byte {
-	return buildTextFrame(ex4SysName, text)
+// comment - but the LEN byte it writes is `byte(len(text))`, which
+// silently wraps for text 256 bytes or longer (byte(256) == 0): the
+// frame would then claim a 0-byte payload while still appending all
+// 256+ raw text bytes before FB, desyncing the frame structure for
+// any receiver. Unlike EX4DateTimeFrame/shutdownFamily's version of
+// this bug class, this one IS directly reachable today - the CLI's
+// `display`/`-d` command passes arbitrary user-supplied text straight
+// through with nothing else bounding its length - so it's checked
+// here rather than left as a "not reachable via the current product"
+// footnote.
+func EX4DisplayFrame(text string) ([]byte, error) {
+	if len(text) > 255 {
+		return nil, fmt.Errorf("mcu: display text too long (%d bytes, max 255)", len(text))
+	}
+	return buildTextFrame(ex4SysName, text), nil
 }
 
 // Display writes text to the front-panel LCD.
 func (m *EX4) Display(text string) error {
-	return sendLegacy(m.p, EX4DisplayFrame(text))
+	frame, err := EX4DisplayFrame(text)
+	if err != nil {
+		return err
+	}
+	return sendLegacy(m.p, frame)
 }
 
 // Shutdown/Reset take a runtime value byte - MCUReset in particular

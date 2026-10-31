@@ -221,6 +221,25 @@ func TestRun_DisplayTextLookingLikeAFlag(t *testing.T) {
 	}
 }
 
+// Regression test for the real bug fixed alongside the toBCD one:
+// mcu.EX4DisplayFrame's LEN byte silently wrapped for text 256 bytes
+// or longer. Confirm the CLI surfaces this as a normal "would fail"
+// under -n (not a panic or a wrong-but-silent frame), and as a normal
+// usage-class failure on a real run.
+func TestRun_DisplayTextTooLong(t *testing.T) {
+	text256 := strings.Repeat("A", 256)
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-d", text256})
+	if code != exitOK || !strings.Contains(out, "would fail") {
+		t.Errorf("code=%d out=%q", code, out)
+	}
+
+	text255 := strings.Repeat("A", 255)
+	code, out, _ = captureRun(t, []string{"-b", "ex4", "-n", "-d", text255})
+	if code != exitOK || strings.Contains(out, "would fail") {
+		t.Errorf("255 bytes should still be accepted: code=%d out=%q", code, out)
+	}
+}
+
 func TestRun_DisplayUnsupportedOnEX2AndEX2U(t *testing.T) {
 	for _, b := range []string{"ex2", "ex2u"} {
 		code, _, errOut := captureRun(t, []string{"-b", b, "-n", "-d", "hi"})
