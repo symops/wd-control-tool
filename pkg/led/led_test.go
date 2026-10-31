@@ -243,3 +243,32 @@ func TestZoneColorStateStringers(t *testing.T) {
 		}
 	}
 }
+
+// The "unknown" fallback itself (every Stringer's default case) had
+// no coverage - only valid values were ever passed to String() above.
+// This is also the exact reason errBadZone/errBadColor/errBadState
+// had to stop using %v (see pkg/led/errors.go and
+// TestPlan_RejectsBadInput) - make sure the fallback they'd otherwise
+// have produced actually is "unknown", not something else.
+func TestZoneColorStateStringers_UnknownFallback(t *testing.T) {
+	if got := Zone(99).String(); got != "unknown" {
+		t.Errorf("Zone(99).String() = %q, want %q", got, "unknown")
+	}
+	if got := Color(99).String(); got != "unknown" {
+		t.Errorf("Color(99).String() = %q, want %q", got, "unknown")
+	}
+	if got := State(99).String(); got != "unknown" {
+		t.Errorf("State(99).String() = %q, want %q", got, "unknown")
+	}
+}
+
+// Set's own early-return-on-Plan-error branch had no coverage - every
+// other Set() call in this file used valid arguments (invalid-input
+// coverage so far only went through Plan directly, in
+// TestPlan_RejectsBadInput).
+func TestSet_RejectsBadInput(t *testing.T) {
+	mem := fakeregio.New(t)
+	if err := Set(mem, Power, Color(99), On); err == nil {
+		t.Error("Set with invalid color: want error, got nil")
+	}
+}

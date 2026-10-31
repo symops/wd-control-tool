@@ -63,3 +63,24 @@ func TestPort_Close(t *testing.T) {
 		t.Errorf("Close: %v", err)
 	}
 }
+
+// sendBytes's own pace parameter is optional (nil skips pacing), but
+// every production call site (sendEX2U, sendLegacy) always passes a
+// real closure - nothing exercises the nil case. Call it directly
+// (same package) to cover it.
+func TestPort_SendBytes_NilPace(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	want := []byte{0x01, 0x02, 0x03}
+	done := make(chan error, 1)
+	go func() { done <- p.sendBytes(want, nil) }()
+
+	got := fake.ReadFrame(t, len(want), time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("sendBytes: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}

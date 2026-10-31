@@ -94,6 +94,20 @@ func TestReadWriteReg32_LastBytesOfFile(t *testing.T) {
 	}
 }
 
+// TestApplyAll_StopsAtFirstError (below) only exercises ReadReg32's
+// mmap-failure path, since SetClearBits always reads before it
+// writes - WriteReg32's own error return was never hit by anything.
+// Call it directly on a closed file to close that gap.
+func TestWriteReg32_MmapFailure(t *testing.T) {
+	mem := newFakeMem(t, 1<<20)
+	if err := mem.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := mem.WriteReg32(0x1000, 0xDEADBEEF); err == nil {
+		t.Fatal("WriteReg32 on a closed file: want error, got nil")
+	}
+}
+
 func TestApplyAll_StopsAtFirstError(t *testing.T) {
 	mem := newFakeMem(t, 1<<20)
 	if err := mem.Close(); err != nil {
