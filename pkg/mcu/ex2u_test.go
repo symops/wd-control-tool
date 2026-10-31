@@ -2,6 +2,7 @@ package mcu
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,8 +105,17 @@ func TestEX2ULEDFrame(t *testing.T) {
 
 func TestEX2ULEDFrame_RejectsUnknownState(t *testing.T) {
 	for _, bad := range []string{"", "ON", "flashing", "breath"} {
-		if _, err := EX2ULEDFrame(bad); err == nil {
+		_, err := EX2ULEDFrame(bad)
+		if err == nil {
 			t.Errorf("EX2ULEDFrame(%q): want error, got nil", bad)
+			continue
+		}
+		// The message must name the actual problem (an unknown LED
+		// state) rather than a generic "command" - this was wrong in
+		// an earlier version (errUnknownCommand, shared with nothing
+		// else) and would have confused a CLI user.
+		if !strings.Contains(err.Error(), "led state") {
+			t.Errorf("EX2ULEDFrame(%q) error = %q, want it to mention \"led state\"", bad, err.Error())
 		}
 	}
 }

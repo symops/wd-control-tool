@@ -81,7 +81,7 @@ func EX2ULEDFrame(state string) ([]byte, error) {
 	case "breathing", "breathe":
 		return ex2uFrame(0x03, 0x06, 0x04), nil
 	default:
-		return nil, errUnknownCommand(state)
+		return nil, errUnknownLEDState(state)
 	}
 }
 
