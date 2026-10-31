@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/symops/wd-control-tool/pkg/board"
 )
@@ -800,5 +801,33 @@ func TestRun_ReadmeExamplesActuallyWork(t *testing.T) {
 		if code != exitOK {
 			t.Errorf("README example %v: code=%d err=%q", args, code, errOut)
 		}
+	}
+}
+
+// Chaining several actions in one command is this session's headline
+// feature (replacing -c) - confirm a long chain (200 actions) doesn't
+// hit some unexpected slowdown or resource limit in parseArgs' own
+// loop/slicing or in the sequential dispatch loop in run(). All
+// dry-run, so this only exercises the parsing/dispatch path, not real
+// hardware timing.
+func TestRun_LongActionChainDoesNotMisbehave(t *testing.T) {
+	const n = 200
+	args := []string{"-b", "ex2u", "-n"}
+	for i := 0; i < n; i++ {
+		args = append(args, "-f", "50")
+	}
+
+	start := time.Now()
+	code, out, errOut := captureRun(t, args)
+	elapsed := time.Since(start)
+
+	if code != exitOK {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	if got := strings.Count(out, "would send fan"); got != n {
+		t.Errorf("got %d described actions, want %d", got, n)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("200 dry-run actions took %v, want well under 2s (no hardware I/O happens under -n)", elapsed)
 	}
 }
