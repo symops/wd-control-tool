@@ -69,7 +69,7 @@ func (m *EX2U) TempRaw() error { return m.send(0x03, 0x08, 0x00) }
 var EX2ULEDStates = []string{"on", "off", "blinking", "breathing"}
 
 // EX2ULEDFrame builds the frame for EX2U's status LED, from the same
-// state vocabulary the CLI's `-l/--led -c STATE` accepts.
+// state vocabulary the CLI's `-l/--led STATE` accepts.
 func EX2ULEDFrame(state string) ([]byte, error) {
 	switch state {
 	case "on":

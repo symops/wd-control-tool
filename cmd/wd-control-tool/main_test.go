@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/symops/wd-control-tool/pkg/board"
 )
 
 // captureRun runs run(args) with os.Stdout/os.Stderr redirected to
@@ -426,4 +428,133 @@ func TestRun_DebugAloneWithoutDryRunStillExecutesDescribeOnly(t *testing.T) {
 	if !strings.Contains(errOut, "unsupported fan level") {
 		t.Errorf("errOut=%q", errOut)
 	}
+}
+
+// Under -D, a "would fail" action must only print its one describe
+// line, never the frame-bytes/register-address detail lines (there
+// is nothing real to show - frameDebugLines/regWriteDebugLines both
+// return nil when planErr != nil). A regression here would leak a
+// stale or zero-valued frame/address that was never actually going
+// to be sent.
+func TestRun_DebugLinesSuppressedOnWouldFail(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-f", "42"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	debugLines := 0
+	for _, l := range lines {
+		if strings.HasPrefix(l, "debug:") {
+			debugLines++
+		}
+	}
+	if debugLines != 1 {
+		t.Errorf("out=%q, want exactly 1 debug: line (the describe line only), got %d", out, debugLines)
+	}
+}
+
+// Under -n, every action in a multi-action command is still
+// described, even after an earlier one reports "would fail" - dry-run
+// never stops early, unlike a real run (see
+// TestRun_MultipleActions_FailFastOnRealRun).
+func TestRun_DryRun_MultipleActionsAllDescribedEvenAfterAFailure(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "42", "-f", "50"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "would fail") {
+		t.Errorf("out=%q, want the first action's failure reported", out)
+	}
+	if !strings.Contains(out, "would send fan 50%") {
+		t.Errorf("out=%q, want the second action still described despite the first failing", out)
+	}
+}
+
+// buildLEDAction checks zone, then color, then state - with every
+// field invalid, the zone error must be the one reported (pin the
+// priority so a refactor can't silently reorder it and confuse users
+// about which field is actually wrong).
+func TestRun_LEDMultipleInvalidFields_ZoneErrorWins(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-l", "badzone", "badcolor", "badstate"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, `unknown led zone "badzone"`) {
+		t.Errorf("out=%q, want the zone error specifically", out)
+	}
+}
+
+func TestModeNameFor(t *testing.T) {
+	cases := map[string]string{
+		"-l": "led", "--led": "led",
+		"-f": "fan", "--fan": "fan",
+		"-r": "rtc", "--rtc": "rtc",
+		"-d": "display", "--display": "display",
+		"-x": "", "--unknown": "", "": "",
+	}
+	for flag, want := range cases {
+		if got := modeNameFor(flag); got != want {
+			t.Errorf("modeNameFor(%q) = %q, want %q", flag, got, want)
+		}
+	}
+}
+
+func TestArityFor(t *testing.T) {
+	cases := []struct {
+		mode string
+		b    board.Board
+		want int
+	}{
+		{"fan", board.EX2U, 1}, {"fan", board.EX2, 1}, {"fan", board.EX4, 1},
+		{"display", board.EX4, 1},
+		{"rtc", board.EX4, 1},
+		{"led", board.EX2U, 1},
+		{"led", board.EX2, 3},
+		{"led", board.EX4, 3},
+	}
+	for _, c := range cases {
+		if got := arityFor(c.mode, c.b); got != c.want {
+			t.Errorf("arityFor(%q, %v) = %d, want %d", c.mode, c.b, got, c.want)
+		}
+	}
+}
+
+// Short and long forms of every flag must parse identically - a
+// future edit to one spelling's case in parseArgs shouldn't be able
+// to silently diverge from the other.
+func TestParseArgs_ShortAndLongFormsAreEquivalent(t *testing.T) {
+	pairs := [][2][]string{
+		{{"-b", "ex4", "-f", "2"}, {"--board", "ex4", "--fan", "2"}},
+		{{"-b", "ex4", "-d", "hi"}, {"--board", "ex4", "--display", "hi"}},
+		{{"-b", "ex4", "-r", "write"}, {"--board", "ex4", "--rtc", "write"}},
+		{{"-b", "ex4", "-l", "power", "blue", "on"}, {"--board", "ex4", "--led", "power", "blue", "on"}},
+	}
+	for _, pair := range pairs {
+		a, errA := parseArgs(pair[0])
+		b, errB := parseArgs(pair[1])
+		if errA != nil || errB != nil {
+			t.Fatalf("%v / %v: errA=%v errB=%v", pair[0], pair[1], errA, errB)
+		}
+		if a.board != b.board || len(a.actions) != len(b.actions) {
+			t.Errorf("%v / %v: a=%+v b=%+v", pair[0], pair[1], a, b)
+			continue
+		}
+		for i := range a.actions {
+			if a.actions[i].mode != b.actions[i].mode || !equalStrings(a.actions[i].args, b.actions[i].args) {
+				t.Errorf("%v / %v: action %d differs: a=%+v b=%+v", pair[0], pair[1], i, a.actions[i], b.actions[i])
+			}
+		}
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
