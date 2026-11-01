@@ -82,6 +82,7 @@ test-race:
 FUZZTIME := 30s
 
 fuzz:
+	go test ./pkg/board/ -run=NONE -fuzz=FuzzParse_NeverPanicsAndRoundTrips -fuzztime=$(FUZZTIME)
 	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
 	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
 	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX2ULEDFrame_NeverPanics -fuzztime=$(FUZZTIME)

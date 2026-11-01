@@ -111,8 +111,17 @@ Coverage, all without root or real hardware:
   `shutdownFamily`, `EX4DisplayFrame`'s LEN byte - see git history)
   all came from the same root cause: a value landing directly in a
   wire frame without being checked against the frame's own FA/FB
-  markers. `make fuzz` runs six native Go fuzz tests, each clean for
-  millions of executions:
+  markers. `make fuzz` runs seven native Go fuzz tests, each clean
+  for millions of executions:
+  - `FuzzParse_NeverPanicsAndRoundTrips` (`pkg/board/board_test.go`)
+    fuzzes `board.Parse` itself - the function that takes
+    `-b/--board`'s value completely unvalidated, and the one every
+    other Fuzz* target in this project is several layers downstream
+    of. Checks that a successful parse is never `Unknown` and that
+    its own `String()` re-parses to the identical board - the exact
+    invariant `cmd/wd-control-tool/main.go`'s `setBoard` relies on
+    when it compares two `-b/--board` occurrences by their resolved
+    `board.Board` rather than their raw strings (see that fix).
   - `FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload`
     (`pkg/mcu/legacy_test.go`) formalizes the frame-marker-collision
     property fixed by hand for specific boundary cases.
