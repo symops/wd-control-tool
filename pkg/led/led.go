@@ -110,6 +110,11 @@ const (
 	// than the other for the same transition). See hdBayBits for the
 	// confirmed bits and SPEC.md, "LED (EX2/EX4)", for the full
 	// capture this came from.
+	//
+	// hdBayReg1 is the EXACT SAME physical register pkg/fan/ex2.go
+	// calls "reg2" - the two subsystems share it on entirely disjoint
+	// bits (fan: bit 0 only; hd-bay LED: bits 20/21/23/25), safely,
+	// via regio.Mem's atomic Set/Clear.
 	hdBayReg1 = 0xF1018140
 	hdBayReg2 = 0xF1018150
 
