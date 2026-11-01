@@ -466,6 +466,8 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	bad := "/nonexistent/wd-control-tool-test-path"
 	cases := [][]string{
 		{"-b", "ex2u", "--serial", bad, "-f", "50"},
+		{"-b", "ex4", "--serial", bad, "-f", "2"},   // found missing via go tool cover: EX4's fan apply() had no coverage of mcu.Open's error branch at all
+		{"-b", "ex2u", "--serial", bad, "-l", "on"}, // same gap, EX2U's led apply()
 		{"-b", "ex4", "--serial", bad, "-d", "hi"},
 		{"-b", "ex4", "--serial", bad, "-r", "write"},
 	}
@@ -1187,5 +1189,37 @@ func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) 
 	}
 	if rtcFrame[1] != 0x01 || rtcFrame[2] != 0x00 || rtcFrame[3] != 0x04 || rtcFrame[4] != 0x07 {
 		t.Errorf("3rd frame (rtc) header = % X, want WDateAndTime's 01 00 04 07", rtcFrame[1:5])
+	}
+}
+
+// Found via `go tool cover`: buildLEDAction's EX2U branch's apply()
+// closure - the real (non-dry-run) code path from mcu.Open through
+// mcu.NewEX2U(p).LEDOn/LEDOff/LEDBlink/LEDBreathe - had ZERO
+// coverage. Every other EX2U led test either used -n/--dry-run
+// (which never calls apply() at all) or called mcu.EX2ULEDFrame/
+// NewEX2U's methods directly (bypassing the CLI layer entirely). A
+// real `-l STATE` on EX2U, run through the actual CLI, had never
+// once been exercised end to end.
+func TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState(t *testing.T) {
+	cases := []struct {
+		state string
+		want  byte // the frame's param byte - see SPEC.md's EX2U command table
+	}{
+		{"on", 0x01},
+		{"off", 0x00},
+		{"blinking", 0x02},
+		{"breathing", 0x04},
+	}
+	for _, c := range cases {
+		fake := fakemcu.New(t)
+		code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-l", c.state})
+		if code != exitOK {
+			t.Fatalf("state=%q: code=%d err=%q", c.state, code, errOut)
+		}
+		got := fake.ReadFrame(t, 7, 2*time.Second)
+		want := []byte{0xFA, 0x03, 0x06, c.want, 0x00, 0x00, 0xFB}
+		if !bytes.Equal(got, want) {
+			t.Errorf("state=%q: wire bytes = % X, want % X", c.state, got, want)
+		}
 	}
 }
