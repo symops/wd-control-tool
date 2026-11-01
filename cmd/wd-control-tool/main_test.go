@@ -667,6 +667,70 @@ func TestRun_RealRun_TwoChainedDisplayActions_DifferentLengths(t *testing.T) {
 // TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState). Confirms
 // TWO chained EX2U actions (fan then led) BOTH succeed for real and
 // BOTH produce exactly the right frame on the wire, in order.
+// EX2's two MCU-based actions (power LED and fan RPM read) had never
+// been chained together in one real-run command - unlike every
+// other chain test in this file, this one needs a fake reply written
+// back mid-run (for the fan RPM action), so run() itself (not the
+// captureRun helper, which calls t.Fatalf internally on pipe setup -
+// not safe to run on a non-test goroutine) is called directly in a
+// background goroutine, with the stdout/stderr pipe setup kept on
+// the main test goroutine where t.Fatalf is safe.
+func TestRun_RealRun_EX2_PowerLedThenFanRPM_BothSucceed(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	origOut, origErr := os.Stdout, os.Stderr
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = outW, errW
+	outCh := make(chan string, 1)
+	errCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+	go func() { b, _ := io.ReadAll(errR); errCh <- string(b) }()
+
+	codeCh := make(chan int, 1)
+	go func() {
+		codeCh <- run([]string{"-b", "ex2", "--serial", fake.SlavePath, "-l", "power", "red", "on", "-f", "rpm"})
+	}()
+
+	ledFrames := fake.ReadFrame(t, 14, 3*time.Second) // PowerLED's two frames, ~400ms apart
+	wantLed := []byte{
+		0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB, // clear blue
+		0xFA, 0x26, 0x00, 0x14, 0x00, 0x01, 0xFB, // set red on
+	}
+	if !bytes.Equal(ledFrames, wantLed) {
+		t.Errorf("power LED frames = % X, want % X", ledFrames, wantLed)
+	}
+
+	fanReq := fake.ReadFrame(t, 7, 3*time.Second)
+	wantFanReq := []byte{0xFA, 0x03, 0x09, 0x00, 0x00, 0x00, 0xFB}
+	if !bytes.Equal(fanReq, wantFanReq) {
+		t.Fatalf("fan RPM request = % X, want % X", fanReq, wantFanReq)
+	}
+	if _, err := fake.Master.Write([]byte{0xFA, 0x03, 0x09, 0x00, 0x00, 0x3A, 0xFB}); err != nil {
+		t.Fatalf("write fake fan RPM reply: %v", err)
+	}
+
+	code := <-codeCh
+	outW.Close()
+	errW.Close()
+	os.Stdout, os.Stderr = origOut, origErr
+	out := <-outCh
+	errOutStr := <-errCh
+
+	if code != exitOK {
+		t.Fatalf("code=%d err=%q", code, errOutStr)
+	}
+	if !strings.Contains(out, "fan rpm = 5172") {
+		t.Errorf("stdout=%q, want the decoded fan RPM line", out)
+	}
+}
+
 func TestRun_RealRun_EX2U_FanThenLed_BothSucceed(t *testing.T) {
 	fake := fakemcu.New(t)
 
