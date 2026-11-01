@@ -710,6 +710,20 @@ func TestRun_LedBeforeConflictingBoards_EX2U(t *testing.T) {
 	}
 }
 
+// The hint pass's arity decision compares against board.EX2U (the
+// resolved Board, via board.Parse), never the raw -b/--board string
+// - so an ALIAS of EX2U ("ex2-ultra", not the literal "ex2u") must
+// resolve the hint just as correctly as the canonical spelling does.
+func TestRun_LedBeforeBoard_EX2U_ViaAlias(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-l", "on", "-b", "ex2-ultra", "-n"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "led on to EX2U") {
+		t.Errorf("out=%q, want the led action described", out)
+	}
+}
+
 func TestParseArgs_ModifiersAfterAction(t *testing.T) {
 	// Unlike the old -c-delimited grammar, -n/-D are ordinary flags
 	// now and may appear AFTER an action's fixed-arity arguments too.
