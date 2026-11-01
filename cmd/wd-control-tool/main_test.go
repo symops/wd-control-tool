@@ -107,6 +107,53 @@ func TestRun_BoardPositionDoesNotMatter(t *testing.T) {
 // to apply ex4 to the first action too, reporting a baffling
 // "unsupported fan level 50" for a value that is perfectly valid on
 // the ex2u the user actually wrote right before it.
+// The pre-pass that scans for -b/--board's value (it may appear
+// anywhere - see TestRun_BoardPositionDoesNotMatter) used to scan
+// every raw token blindly, with no idea that some of them are
+// actually ANOTHER action's own fixed-arity argument, not a second
+// -b/--board flag. `-b ex4 -n -d -b` (display text that happens to
+// literally BE "-b") used to fail with "-b requires a value" -
+// confirmed by actually running it, not just reading the code - even
+// though README/printUsage both promise display text is taken
+// "verbatim, even if it looks like a flag". Each case below uses a
+// different action whose own single argument is the string "-b",
+// confirming each one is now correctly treated as that action's own
+// verbatim argument (and fails, if at all, at THAT action's own
+// validation layer - a bad fan level, an unknown rtc subcommand - not
+// as a phantom second board flag).
+func TestRun_ActionArgumentThatLooksLikeBoardFlag(t *testing.T) {
+	cases := []struct {
+		args     []string
+		wantCode int
+		wantText string // substring to find in stdout+stderr combined
+	}{
+		// Display text "-b" is perfectly valid, so this dry-runs clean.
+		{[]string{"-b", "ex4", "-n", "-d", "-b"}, exitOK, `display text "-b"`},
+		// Fan's level parse (strconv.Atoi) and rtc's subcommand check
+		// both fail as hard usage errors, regardless of -n - not
+		// through the planErr/"would fail" dry-run path.
+		{[]string{"-b", "ex4", "-n", "-f", "-b"}, exitUsage, "fan level must be an integer"},
+		{[]string{"-b", "ex4", "-n", "-r", "-b"}, exitUsage, "unknown rtc subcommand"},
+		// led's zone validation DOES go through planErr, so this is a
+		// dry-run "would fail", not a hard error - board (ex2) is
+		// already known from -b appearing before -l here.
+		{[]string{"-b", "ex2", "-n", "-l", "-b", "red", "on"}, exitOK, `would fail: unknown led zone "-b"`},
+	}
+	for _, c := range cases {
+		code, out, errOut := captureRun(t, c.args)
+		if code != c.wantCode {
+			t.Errorf("%v: code=%d, want %d; out=%q err=%q", c.args, code, c.wantCode, out, errOut)
+			continue
+		}
+		if !strings.Contains(out, c.wantText) && !strings.Contains(errOut, c.wantText) {
+			t.Errorf("%v: out=%q err=%q, want one of them to contain %q", c.args, out, errOut, c.wantText)
+		}
+		if strings.Contains(errOut, "requires a value") {
+			t.Errorf("%v: errOut=%q, the literal \"-b\" argument was misdetected as a second board flag", c.args, errOut)
+		}
+	}
+}
+
 func TestRun_ConflictingBoardValuesRejected(t *testing.T) {
 	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-b", "ex4", "-f", "2"})
 	if code != exitUsage {

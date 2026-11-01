@@ -124,9 +124,30 @@ func parseArgs(args []string) (*options, error) {
 		return nil
 	}
 
+	// This pass must skip over every OTHER mode flag's own
+	// fixed-arity argument(s) while scanning for -b/--board - found
+	// the hard way: `-b ex4 -d -b` (display text that happens to BE
+	// "-b") used to fail with "-b requires a value", because this
+	// pass didn't know the second "-b" token was --display's own
+	// argument, not a second board flag. -f/-d/-r/--serial always
+	// take exactly 1 argument regardless of board, so those are
+	// always skipped correctly here. -l/--led's arity depends on
+	// board (1 on EX2U, 3 otherwise), which creates a genuine
+	// chicken-and-egg case if -l appears before any -b in the
+	// command (board isn't known yet at that point in this very
+	// scan): this conservatively assumes the larger, EX2/EX4 shape
+	// (3) when board isn't known yet, since under-skipping (the
+	// original bug) is far more likely to misfire in practice than
+	// over-skipping a smaller EX2U action's trailing token in the
+	// rare case this guess turns out wrong - and either way, the
+	// second (fully board-aware, authoritative) pass below does the
+	// real arity-aware walk and builds the actual action list, so
+	// this pass only ever affects which tokens look like -b/--board
+	// here, never what actually gets executed.
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "-b" || a == "--board" {
+		switch {
+		case a == "-b" || a == "--board":
 			i++
 			if i >= len(args) {
 				return nil, fmt.Errorf("%s requires a value", a)
@@ -134,16 +155,24 @@ func parseArgs(args []string) (*options, error) {
 			if err := setBoard(a, args[i]); err != nil {
 				return nil, err
 			}
-		} else if strings.HasPrefix(a, "--board=") {
+		case strings.HasPrefix(a, "--board="):
 			if err := setBoard("--board", strings.TrimPrefix(a, "--board=")); err != nil {
 				return nil, err
 			}
+		case a == "-f" || a == "--fan" || a == "-d" || a == "--display" || a == "-r" || a == "--rtc" || a == "--serial":
+			i++ // skip this flag's own single argument, whatever it looks like
+		case a == "-l" || a == "--led":
+			n := 3
+			if opts.boardValue == board.EX2U {
+				n = 1
+			}
+			i += n
 		}
 	}
 
 	// opts.boardValue was already resolved (and validated) by setBoard
-	// above, for every -b/--board occurrence - nothing left to parse
-	// here.
+	// above, for every genuine -b/--board occurrence - nothing left
+	// to parse here.
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
