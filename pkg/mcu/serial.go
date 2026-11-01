@@ -186,9 +186,13 @@ func (p *Port) sendAndRecv(send func() error, timeout time.Duration) ([]byte, er
 
 // recvBytes reads whatever bytes arrive on the port within timeout.
 // Zero bytes with a nil error is a normal "nothing arrived in time"
-// outcome (the expected result for any reply this project hasn't
-// decoded yet - see EX2U.TempReply), not a failure; a non-nil error
-// means the read itself failed.
+// outcome, not a failure - independent of whether this project has a
+// decoder for the reply at all: EX2U.TempReply's reply IS decoded
+// (EX2UDecodeTempFahrenheit/Celsius), but every real end-to-end run
+// of this tool's own `-t` command has still seen nothing come back
+// within the timeout (see buildTempAction's own CLI-level test for
+// that), same as it would for a genuinely undecoded reply. A non-nil
+// error means the read itself failed.
 //
 // Open configures VMIN=1/VTIME=0, so the underlying Read blocks
 // until at least one byte is available - there is no kernel-level
