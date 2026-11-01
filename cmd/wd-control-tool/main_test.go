@@ -671,6 +671,22 @@ func TestRun_LedBeforeBoard_EX2U_SingleArgArity(t *testing.T) {
 	}
 }
 
+// A stronger variant of the above: TWO EX2U led actions chained
+// before the board flag, plus a fan action for good measure -
+// confirms the hint pass's "board not yet known at THIS point in
+// the real pass's own scan" fallback keeps working correctly across
+// multiple occurrences, not just a lone one, and alongside another
+// action type's own fixed-arity argument.
+func TestRun_MultipleActionsBeforeBoard_EX2U(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-f", "50", "-l", "on", "-l", "off", "-b", "ex2u", "-n"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "fan 50%") || !strings.Contains(out, "led on to EX2U") || !strings.Contains(out, "led off to EX2U") {
+		t.Errorf("out=%q, want all 3 actions described", out)
+	}
+}
+
 func TestParseArgs_ModifiersAfterAction(t *testing.T) {
 	// Unlike the old -c-delimited grammar, -n/-D are ordinary flags
 	// now and may appear AFTER an action's fixed-arity arguments too.
