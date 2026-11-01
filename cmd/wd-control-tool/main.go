@@ -136,6 +136,19 @@ func parseArgs(args []string) (*options, error) {
 	// action's own argument) are harmless: it is consulted ONLY as a
 	// last-resort hint, and only to size one skip, never to set
 	// opts.board/opts.boardValue themselves.
+	//
+	// Known, accepted residual edge case (verified by hand, not
+	// guessed): if led's OWN zone/state argument on EX2U is ALSO
+	// deliberately "-b" (e.g. `-l -b -b ex2u`), this hint can itself
+	// get confused by that same collision and still misjudge the
+	// arity, which can in turn make a genuine, later -b/--board go
+	// unseen by the real pass too. The failure mode is a loud, clear
+	// "-b/--board is required" usage error (never silent corruption
+	// or a crash), and it requires deliberately using a reserved-
+	// looking string as led's own argument on top of the exact
+	// ordering this already-narrow case depends on - not worth
+	// chasing further for this CLI's actual argument vocabulary
+	// (zone/color/state names, never "-b"-shaped in practice).
 	var hintBoard board.Board
 	for i := 0; i < len(args); i++ {
 		a := args[i]
