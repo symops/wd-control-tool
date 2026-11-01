@@ -73,6 +73,21 @@ func TestEX4_FanLevel_OverPTY(t *testing.T) {
 	}
 }
 
+// FanLevel's own error-propagation branch (when EX4FanLevelFrame
+// rejects an out-of-range level) had no coverage within pkg/mcu
+// itself - the mirror image of why
+// TestEX4_SetDateAndTime_PropagatesValidationError/
+// TestEX4_Display_PropagatesValidationError exist (found via the
+// same `go tool cover` pass, this time scoped to pkg/mcu's own
+// package coverage rather than the -coverpkg=./pkg/... view).
+func TestEX4_FanLevel_PropagatesValidationError(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX4(OpenFile(fake.Slave))
+	if err := m.FanLevel(5); err == nil { // valid range is 0-4
+		t.Error("FanLevel(5): want error, got nil")
+	}
+}
+
 func TestEX4_Display_OverPTY(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX4(OpenFile(fake.Slave))
@@ -124,6 +139,33 @@ func TestEX4_RequestDateAndTime_OverPTY(t *testing.T) {
 	}
 
 	want := []byte{0xFA, 0x01, 0x00, 0x03, 0x01, 0x00, 0xFB}
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}
+
+// SetDateAndTime's SUCCESS path (sendLegacy actually firing) had no
+// coverage within pkg/mcu's own package either - the opposite gap
+// from FanLevel's: pkg/rtc's own tests call SetDateAndTime with
+// valid values (via rtc.EX4Writer.Set), which covers it in the
+// combined -coverpkg=./pkg/... view, but pkg/mcu's own test suite
+// never called it with anything but an invalid month. This project's
+// own house rule (see BUILDING.md on EX4's SetDateAndTime/FanLevel
+// coverage history) is specifically to not lean on a different
+// package's tests for a package's own exported method.
+func TestEX4_SetDateAndTime_OverPTY(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX4(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.SetDateAndTime(2026, 10, 31, 6, 14, 5, 30) }() // worked example from SPEC.md
+
+	got := fake.ReadFrame(t, 13, time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("SetDateAndTime: %v", err)
+	}
+
+	want := []byte{0xFA, 0x01, 0x00, 0x04, 0x07, 0x30, 0x05, 0x14, 0x06, 0x31, 0x10, 0x26, 0xFB}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X", got, want)
 	}

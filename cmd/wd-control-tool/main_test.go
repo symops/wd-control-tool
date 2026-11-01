@@ -803,6 +803,38 @@ func TestBuildAction_PanicsOnUnknownMode(t *testing.T) {
 	buildAction(board.EX4, "bogus", "/dev/ttyS1", nil)
 }
 
+// buildFanAction/buildLEDAction's own "unsupported board" default
+// branches are just as unreachable in practice as buildAction's mode
+// panic (board.Parse only ever returns EX2U/EX2/EX4), and found via
+// the same `go tool cover` pass that caught
+// TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState's gap. Call
+// them directly with board.Unknown to confirm the defensive path
+// itself behaves correctly (returns nil/exitUnsupported, doesn't
+// panic) rather than leaving it completely unexercised.
+func TestBuildFanAction_UnsupportedBoardReturnsUnsupportedErr(t *testing.T) {
+	origErr := os.Stderr
+	_, w, _ := os.Pipe()
+	os.Stderr = w
+	defer func() { os.Stderr = origErr; w.Close() }()
+
+	act, code := buildFanAction(board.Unknown, "/dev/ttyS1", []string{"1"})
+	if act != nil || code != exitUnsupported {
+		t.Errorf("buildFanAction(Unknown, ...) = (%v, %d), want (nil, %d)", act, code, exitUnsupported)
+	}
+}
+
+func TestBuildLEDAction_UnsupportedBoardReturnsUnsupportedErr(t *testing.T) {
+	origErr := os.Stderr
+	_, w, _ := os.Pipe()
+	os.Stderr = w
+	defer func() { os.Stderr = origErr; w.Close() }()
+
+	act, code := buildLEDAction(board.Unknown, "/dev/ttyS1", []string{"power", "blue", "on"})
+	if act != nil || code != exitUnsupported {
+		t.Errorf("buildLEDAction(Unknown, ...) = (%v, %d), want (nil, %d)", act, code, exitUnsupported)
+	}
+}
+
 // Short and long forms of every flag must parse identically - a
 // future edit to one spelling's case in parseArgs shouldn't be able
 // to silently diverge from the other.
