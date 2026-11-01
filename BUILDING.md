@@ -207,6 +207,21 @@ real MCU or SoC behaves as SPEC.md describes. That still needs real
 hardware (see the project's "на реальном железе посмотим потом" note
 - real-hardware verification is a separate, later step).
 
+This limit is not hypothetical: real EX2U hardware testing found
+exactly the gap this paragraph warns about. `-b ex2u -f 50` sent the
+documented-correct 7-byte frame with no I/O error (every PTY-based
+test agreed it should), but the fan never responded - `pkg/mcu/
+ex2u.go` was sleeping 100ms between bytes based on an assumption
+("the real hardware's own margin") that had never actually been
+strace-confirmed, 200x slower than the real, working `mcu_ctl`'s own
+~0.5ms-apart writes. The Welltrend MCU's own frame-reception state
+machine most likely timed out between bytes and never saw a complete
+frame - a failure mode no PTY (which has no such timeout at all)
+could ever surface. Fixed by removing the deliberate delay entirely,
+confirmed via a live `strace -tt` capture of the real tool (see
+SPEC.md's "EX2U protocol"); see `TestEX2U_FanPercent_HasNoDeliberateInterByteDelay`
+for the regression test this earned.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.
