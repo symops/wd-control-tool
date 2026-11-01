@@ -624,23 +624,28 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 // ex2uTempReplyTimeout is how long buildTempAction waits for a reply
 // after sending the tmp_get request before reporting "no reply" -
 // generous relative to the EX2U UART's own byte timing (a handful of
-// milliseconds per frame, per SPEC.md), but no real reply has ever
-// been captured to calibrate against, so this is deliberately
-// conservative rather than tuned to an assumption.
+// milliseconds per frame, per SPEC.md) and relative to a real
+// capture, where the reply arrived well under 1s.
 const ex2uTempReplyTimeout = 2 * time.Second
 
-// buildTempAction sends EX2U's tmp_get request and prints whatever
-// raw bytes come back, unconverted - see mcu.EX2U.TempReply's doc
-// comment for why this doesn't attempt a Celsius/Fahrenheit decode.
-// EX2U-only: no temp command is documented for EX2/EX4's legacy
-// protocol (see SPEC.md's command tables).
+// buildTempAction sends EX2U's tmp_get request, always prints the
+// raw reply bytes, and additionally prints the decoded Celsius value
+// when the reply matches the confirmed frame shape (see
+// mcu.EX2UDecodeTempCelsius) - matching the vendor tmp_get_c's own
+// "Temperature: N C" wording. The raw line is kept even on a
+// successful decode: unlike every other command here, this one's
+// reply shape rests on a single hardware capture (see SPEC.md's
+// Unresolved #1), not an independent decompile, so showing the bytes
+// that produced the decoded value costs nothing and keeps that
+// honest. EX2U-only: no temp command is documented for EX2/EX4's
+// legacy protocol (see SPEC.md's command tables).
 func buildTempAction(b board.Board, serialPath string, args []string) (*action, int) {
 	if b != board.EX2U {
 		return unsupportedErr("temp is not supported on board %v", b)
 	}
 	frame := mcu.EX2UTempRequestFrame()
 	return &action{
-		describe:   fmt.Sprintf("request temperature from EX2U MCU (%s) and print the raw reply (undecoded - see SPEC.md)", serialPath),
+		describe:   fmt.Sprintf("request temperature from EX2U MCU (%s)", serialPath),
 		debugLines: frameDebugLines(nil, frame, serialPath, 19200),
 		apply: func() error {
 			p, err := mcu.Open(serialPath, 19200)
@@ -653,10 +658,13 @@ func buildTempAction(b board.Board, serialPath string, args []string) (*action, 
 				return err
 			}
 			if len(reply) == 0 {
-				fmt.Printf("temp: no reply from MCU within %v (reply framing is undecoded - see SPEC.md's Unresolved #1)\n", ex2uTempReplyTimeout)
+				fmt.Printf("temp: no reply from MCU within %v\n", ex2uTempReplyTimeout)
 				return nil
 			}
-			fmt.Printf("temp: raw reply (undecoded - see SPEC.md's Unresolved #1): % X\n", reply)
+			fmt.Printf("temp: raw reply: % X\n", reply)
+			if c, derr := mcu.EX2UDecodeTempCelsius(reply); derr == nil {
+				fmt.Printf("Temperature: %d C\n", c)
+			}
 			return nil
 		},
 	}, exitOK

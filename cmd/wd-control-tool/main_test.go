@@ -758,6 +758,55 @@ func TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes(t *testing.T) {
 	if !strings.Contains(out, "11 22 33") {
 		t.Errorf("stdout=%q, want the raw reply bytes printed", out)
 	}
+	if strings.Contains(out, "Temperature:") {
+		t.Errorf("stdout=%q, a reply that doesn't match the confirmed frame shape must not print a decoded Temperature line", out)
+	}
+}
+
+// End-to-end CLI version of TestEX2UDecodeTempCelsius_RealCapturedReply:
+// feeds the exact bytes captured on real EX2U hardware and confirms
+// buildTempAction's apply() prints BOTH the raw bytes and the
+// decoded "Temperature: 30 C" line, matching the vendor tmp_get_c's
+// own wording.
+func TestRun_RealRun_EX2UTemp_DecodesRealCapturedReply(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildTempAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the tmp_get request
+	realCapturedReply := []byte{0xFA, 0x03, 0x08, 0x00, 0x00, 0x56, 0xFB, 0xFA}
+	if _, err := fake.Master.Write(realCapturedReply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "FA 03 08 00 00 56 FB FA") {
+		t.Errorf("stdout=%q, want the raw reply bytes printed", out)
+	}
+	if !strings.Contains(out, "Temperature: 30 C") {
+		t.Errorf("stdout=%q, want the decoded \"Temperature: 30 C\" line", out)
+	}
 }
 
 // Mirrors TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes but for the

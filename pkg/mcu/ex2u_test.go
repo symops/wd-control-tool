@@ -62,6 +62,67 @@ func TestEX2UFrames(t *testing.T) {
 // MCU here stands in for a real one that might send literally
 // anything; this test is not a claim about what a real EX2U actually
 // replies with.
+// The golden case: the exact bytes captured on real EX2U hardware
+// (host MCEX2U-Debian) running this tool's own -t alongside a
+// simultaneous `mcu_ctl tmp_get_c`, which reported "Temperature: 30
+// C" - see EX2UDecodeTempFahrenheit's doc comment for the reasoning.
+func TestEX2UDecodeTempCelsius_RealCapturedReply(t *testing.T) {
+	reply := []byte{0xFA, 0x03, 0x08, 0x00, 0x00, 0x56, 0xFB, 0xFA}
+	c, err := EX2UDecodeTempCelsius(reply)
+	if err != nil {
+		t.Fatalf("EX2UDecodeTempCelsius(% X): %v", reply, err)
+	}
+	if c != 30 {
+		t.Errorf("EX2UDecodeTempCelsius(% X) = %d, want 30", reply, c)
+	}
+	f, err := EX2UDecodeTempFahrenheit(reply)
+	if err != nil {
+		t.Fatalf("EX2UDecodeTempFahrenheit(% X): %v", reply, err)
+	}
+	if f != 86 {
+		t.Errorf("EX2UDecodeTempFahrenheit(% X) = %d, want 86", reply, f)
+	}
+}
+
+// Plain rounding-correctness checks, independent of any hardware
+// capture: (F-32)*5/9 rounded to the nearest whole degree.
+func TestEX2UDecodeTempCelsius_Rounding(t *testing.T) {
+	cases := map[byte]int{
+		85: 29, // (85-32)*5/9 = 29.44 -> 29
+		86: 30, // exact
+		87: 31, // (87-32)*5/9 = 30.56 -> 31
+		32: 0,  // freezing
+	}
+	for fahrenheit, want := range cases {
+		reply := []byte{0xFA, 0x03, 0x08, 0x00, 0x00, fahrenheit, 0xFB}
+		got, err := EX2UDecodeTempCelsius(reply)
+		if err != nil {
+			t.Fatalf("EX2UDecodeTempCelsius(F=%d): %v", fahrenheit, err)
+		}
+		if got != want {
+			t.Errorf("EX2UDecodeTempCelsius(F=%d) = %d, want %d", fahrenheit, got, want)
+		}
+	}
+}
+
+func TestEX2UDecodeTempFahrenheit_RejectsShortOrMalformedReply(t *testing.T) {
+	cases := [][]byte{
+		nil,
+		{},
+		{0xFA, 0x03, 0x08, 0x00, 0x00, 0x56}, // 6 bytes, missing FB
+		{0x00, 0x03, 0x08, 0x00, 0x00, 0x56, 0xFB}, // wrong start byte
+		{0xFA, 0x03, 0x08, 0x00, 0x00, 0x56, 0x00}, // wrong end byte
+	}
+	for _, reply := range cases {
+		if _, err := EX2UDecodeTempFahrenheit(reply); err == nil {
+			t.Errorf("EX2UDecodeTempFahrenheit(% X): want error, got nil", reply)
+		}
+		if _, err := EX2UDecodeTempCelsius(reply); err == nil {
+			t.Errorf("EX2UDecodeTempCelsius(% X): want error, got nil", reply)
+		}
+	}
+}
+
 func TestEX2U_TempReply_ReturnsWhateverRawBytesArrive(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2U(OpenFile(fake.Slave))

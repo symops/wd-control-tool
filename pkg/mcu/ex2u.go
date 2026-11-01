@@ -1,6 +1,10 @@
 package mcu
 
-import "time"
+import (
+	"fmt"
+	"math"
+	"time"
+)
 
 // EX2U's Welltrend 6703F-OG240WT MCU protocol, on uart1, 19200 8N1.
 // Hardware-confirmed (captured via strace on real hardware, and the
@@ -82,16 +86,12 @@ func EX2UTempRequestFrame() []byte { return ex2uFrame(0x03, 0x08, 0x00) }
 func (m *EX2U) TempRaw() error { return m.send(0x03, 0x08, 0x00) }
 
 // TempReply sends the tmp_get request and returns whatever raw bytes
-// the MCU sends back within timeout - possibly none. This
-// deliberately does NOT decode the result into a Celsius/Fahrenheit
-// value: the reply frame's byte layout has never been captured (see
-// SPEC.md's Unresolved #1), and guessing one here would repeat
-// exactly the mistake this project's own house rule exists to avoid
-// - the EX2U inter-byte-pacing bug and the serial baud-rate bug were
-// both found only by comparing a live strace against the real,
-// working vendor tool, never by assuming a plausible-looking value.
-// Once a real reply has been captured and its layout is understood,
-// add the decode on top of this, not instead of it.
+// the MCU sends back within timeout - possibly none. Deliberately
+// returns the UNDECODED bytes rather than a parsed value: see
+// EX2UDecodeTempFahrenheit for the decode, layered on top of this
+// rather than built into it, so a caller can always see exactly what
+// came back even when decoding fails or a future reply shape differs
+// from the one captured so far.
 func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
 	if err := m.TempRaw(); err != nil {
 		return nil, err
@@ -102,6 +102,43 @@ func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
 		return nil, err
 	}
 	return buf[:n], nil
+}
+
+// EX2UDecodeTempFahrenheit decodes a tmp_get reply (as returned by
+// TempReply) into a whole-degree Fahrenheit value.
+//
+// Hardware-confirmed, but from a single live capture: this tool's
+// own `-t` run alongside a simultaneous `mcu_ctl tmp_get_c` on the
+// same real EX2U hardware reported "Temperature: 30 C", and the
+// captured reply was `FA 03 08 00 00 56 FB FA` - the same fixed
+// 7-byte shape every other EX2U frame uses (FA <cat> <subcmd>
+// <param> 00 00 FB), except byte 5 - always 0x00 in a REQUEST - was
+// 0x56 (86 decimal). 30°C is exactly 86°F (30*9/5+32 = 86.0, not a
+// rounding coincidence), so byte 5 is the temperature in whole-degree
+// Fahrenheit - matching tmp_get_f/tmp_get_c sharing one wire command
+// (see SPEC.md's command table). The capture's trailing 8th byte
+// (0xFA) is NOT yet explained (maybe the start of a second,
+// unprompted reply) - this function only looks at the first 7 bytes,
+// the part that is actually confirmed.
+func EX2UDecodeTempFahrenheit(reply []byte) (int, error) {
+	if len(reply) < 7 {
+		return 0, fmt.Errorf("mcu: tmp_get reply too short (%d byte(s), want at least 7): % X", len(reply), reply)
+	}
+	if reply[0] != ex2uStart || reply[6] != ex2uEnd {
+		return 0, fmt.Errorf("mcu: tmp_get reply % X doesn't match the expected FA..FB frame shape", reply[:7])
+	}
+	return int(reply[5]), nil
+}
+
+// EX2UDecodeTempCelsius is EX2UDecodeTempFahrenheit converted to
+// whole-degree Celsius, rounded to the nearest degree - the same
+// integer precision the vendor's own tmp_get_c reports.
+func EX2UDecodeTempCelsius(reply []byte) (int, error) {
+	f, err := EX2UDecodeTempFahrenheit(reply)
+	if err != nil {
+		return 0, err
+	}
+	return int(math.Round(float64(f-32) * 5 / 9)), nil
 }
 
 // EX2ULEDStates lists the CLI vocabulary EX2ULEDFrame/the `-l` command

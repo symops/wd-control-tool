@@ -96,7 +96,7 @@ against real hardware, not just statically).
 | `sys_ready` | `FA 03 01 00 00 00 FB` |
 | `sys_silent` | `FA 03 03 00 00 00 FB` |
 | `sys_shutdown` | `FA 03 03 01 00 00 FB` (confirmed genuine hard power cut, not cosmetic) |
-| `tmp_get_f`/`tmp_get_c` | `FA 03 08 00 00 00 FB` (same wire command; unit conversion is client-side, and no reply has ever been captured - see "Unresolved") |
+| `tmp_get_f`/`tmp_get_c` | request: `FA 03 08 00 00 00 FB`; reply: `FA 03 08 00 00 <F> FB` where `<F>` is the temperature in whole-degree Fahrenheit - confirmed via a live capture (`wd-control-tool -b ex2u -t` alongside a simultaneous `mcu_ctl tmp_get_c` on real hardware, which reported "Temperature: 30 C" while the reply's byte 5 was `0x56` = 86 decimal = exactly 86°F). The reply's 8th byte in that capture was a trailing `0xFA`, not yet explained - see `pkg/mcu/ex2u.go`'s `EX2UDecodeTempFahrenheit`. |
 | `fan_set_0/25/50/75/100` | `FA 02 00 <00/40/80/c0/ff> 00 00 FB` |
 | `sys_reboot` | **not captured** - do not guess it |
 
@@ -380,18 +380,22 @@ display at all.
 
 ## Unresolved (tracked here so future work doesn't re-derive it)
 
-1. **The MCU-to-host reply frame format** is completely undecoded -
-   neither its byte framing nor the request/reply correlation
-   mechanism. This blocks: RTC read-back (`rtc -s`'s actual direction),
-   temperature/fan-status reads, and any acknowledgement/verification
-   that a write command was actually received. Closing this needs
-   either a full decompile of `up_read_daemon`'s `RS232_Read` parsing
-   loop, or (more reliably, per this project's own house rule - see
-   EX2U's protocol history) a live UART capture of a real reply.
-   `wd-control-tool -b ex2u -t` exists for exactly this: it sends
-   `tmp_get`'s request and prints whatever raw bytes come back,
-   undecoded - run it on real EX2U hardware and feed the output back
-   into this spec once something other than "no reply" shows up.
+1. **The MCU-to-host reply frame format** is mostly still undecoded,
+   with one exception: EX2U's `tmp_get` reply is now confirmed (see
+   "EX2U protocol" above and `wd-control-tool -b ex2u -t`, which
+   decodes it into `Temperature: N C`) - it reuses the same 7-byte
+   `FA .. FB` shape as every request, with the answer in byte 5.
+   Still unknown: the general request/reply correlation mechanism
+   (does every command get a reply, or only reads?), EX2/EX4's
+   "legacy" reply framing (a different, undecoded protocol - see
+   below), RTC read-back (`rtc -s`'s actual direction), fan-status
+   reads, any acknowledgement that a write command was received, and
+   the stray trailing byte seen after EX2U's own `tmp_get` reply
+   (possibly an unprompted second reply - needs another capture to
+   confirm). Closing the EX2/EX4 side needs either a full decompile
+   of `up_read_daemon`'s `RS232_Read` parsing loop, or (more
+   reliably, per this project's own house rule - proven twice now on
+   EX2U) a live UART capture of a real reply.
 2. **EX2's `WDateAndTime`/`RDateAndTime` write-side frame layout** -
    header bytes are known (table dump above) but the handler that
    builds the frame from them was not independently decompiled the
