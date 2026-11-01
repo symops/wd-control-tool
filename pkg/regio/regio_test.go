@@ -352,3 +352,26 @@ func TestMem_ReadReg32_NeverObservesATornValueDuringConcurrentWrites(t *testing.
 	close(stopWriters) // only now tell the writers to stop
 	writersWG.Wait()
 }
+
+// Open itself (as opposed to OpenFile, which every other test in this
+// file uses to substitute a regular file for /dev/mem) was the one
+// remaining uncovered line in this package. This confirms it against
+// the real device rather than guessing it's "just os.OpenFile with an
+// error wrapper" - deliberately open-only, no ReadReg32/WriteReg32/
+// SetClearBits call anywhere near it: this package's own mapRegister
+// doc comment explains why an mmap can straddle into a second page,
+// and this test has no business touching real physical memory on
+// whatever host runs `go test`, only confirming Open's own open+wrap
+// logic. Requires CAP_SYS_RAWIO (root on this project's own build/CI
+// host, confirmed - see BUILDING.md); skip rather than fail on a host
+// where /dev/mem isn't openable, since that's an environment fact,
+// not a bug in this package.
+func TestOpen_OpensRealDevMem(t *testing.T) {
+	mem, err := Open()
+	if err != nil {
+		t.Skipf("regio.Open: %v (likely not running with CAP_SYS_RAWIO/root - not a package bug)", err)
+	}
+	if err := mem.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
