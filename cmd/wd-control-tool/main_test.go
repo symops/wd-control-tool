@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/symops/wd-control-tool/pkg/board"
+	"github.com/symops/wd-control-tool/pkg/rtc"
 	"github.com/symops/wd-control-tool/test/fakemcu"
 )
 
@@ -404,6 +405,28 @@ func TestRun_RTCWriteUnimplementedOnEX2(t *testing.T) {
 	}
 	if !strings.Contains(out, "would fail") {
 		t.Errorf("out=%q, want a 'would fail' line mentioning EX2's RTC gap", out)
+	}
+}
+
+// rtc.ErrEX2NotImplemented is exported specifically so a caller can
+// check for it with errors.Is - a library consumer of this project's
+// packages (not just this CLI) might reasonably do that, rather than
+// matching its message text, since it's a well-known sentinel. That
+// contract was never actually pinned anywhere: nothing in this
+// codebase uses errors.Is/errors.As at all, and buildRTCAction's
+// action.planErr field is only ever inspected as a string (via the
+// CLI's own stdout/stderr) in every other test. Confirm the sentinel
+// identity survives unwrapped all the way into action.planErr, so a
+// future refactor can't silently start wrapping it (e.g.
+// fmt.Errorf("rtc: %w", ...)) without a test catching that it broke
+// errors.Is for anyone depending on it.
+func TestBuildRTCAction_EX2_PlanErrIsErrEX2NotImplemented(t *testing.T) {
+	act, code := buildRTCAction(board.EX2, "/dev/ttyS1", []string{"write"})
+	if code != exitOK || act == nil {
+		t.Fatalf("buildRTCAction(EX2, write): act=%v code=%d", act, code)
+	}
+	if !errors.Is(act.planErr, rtc.ErrEX2NotImplemented) {
+		t.Errorf("planErr = %v, want errors.Is(planErr, rtc.ErrEX2NotImplemented) to hold", act.planErr)
 	}
 }
 
