@@ -96,7 +96,7 @@ against real hardware, not just statically).
 | `sys_ready` | `FA 03 01 00 00 00 FB` |
 | `sys_silent` | `FA 03 03 00 00 00 FB` |
 | `sys_shutdown` | `FA 03 03 01 00 00 FB` (confirmed genuine hard power cut, not cosmetic) |
-| `tmp_get_f`/`tmp_get_c` | request: `FA 03 08 00 00 00 FB`; reply: `FA 03 08 00 00 <F> FB` where `<F>` is the temperature in whole-degree Fahrenheit - confirmed via a live capture (`wd-control-tool -b ex2u -t` alongside a simultaneous `mcu_ctl tmp_get_c` on real hardware, which reported "Temperature: 30 C" while the reply's byte 5 was `0x56` = 86 decimal = exactly 86°F). The reply's 8th byte in that capture was a trailing `0xFA`, not yet explained - see `pkg/mcu/ex2u.go`'s `EX2UDecodeTempFahrenheit`. |
+| `tmp_get_f`/`tmp_get_c` | request: `FA 03 08 00 00 00 FB`; reply: `FA 03 08 00 00 <F> FB` where `<F>` is the temperature in whole-degree Fahrenheit - confirmed via two live captures (`wd-control-tool -b ex2u -t` alongside a simultaneous `mcu_ctl tmp_get_c` on real hardware): `0x56`=86 decimal alongside "Temperature: 30 C", and separately `0x54`=84 decimal alongside "Temperature: 28 C". `tmp_get_c`'s F-to-C conversion **truncates** rather than rounds ((F-32)*5/9 as plain C-style integer division): the first capture couldn't distinguish the two (86°F is exactly 30°C either way), but the second does - 84°F rounds to 29 but truncates to 28, and the vendor reported 28. The reply's 8th byte in both captures was a trailing `0xFA`, not yet explained - see `pkg/mcu/ex2u.go`'s `EX2UDecodeTempFahrenheit`/`EX2UDecodeTempCelsius`. |
 | `fan_set_0/25/50/75/100` | `FA 02 00 <00/40/80/c0/ff> 00 00 FB` |
 | `sys_reboot` | **not captured** - do not guess it |
 

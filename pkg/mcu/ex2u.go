@@ -2,7 +2,6 @@ package mcu
 
 import (
 	"fmt"
-	"math"
 	"time"
 )
 
@@ -131,14 +130,21 @@ func EX2UDecodeTempFahrenheit(reply []byte) (int, error) {
 }
 
 // EX2UDecodeTempCelsius is EX2UDecodeTempFahrenheit converted to
-// whole-degree Celsius, rounded to the nearest degree - the same
-// integer precision the vendor's own tmp_get_c reports.
+// Celsius via plain truncating integer division ((F-32)*5/9), NOT
+// rounded to the nearest degree - confirmed by a second live
+// capture: 84°F (0x54) alongside a simultaneous `mcu_ctl tmp_get_c`
+// reporting "Temperature: 28 C". (84-32)*5/9 = 28.89 rounds to 29
+// but truncates to 28 - the vendor's own tmp_get_c truncates
+// (classic C integer-division behavior), and an earlier version of
+// this function that rounded instead matched the FIRST capture
+// (86°F -> exactly 30, where rounding and truncation agree) purely
+// by coincidence, then disagreed with the vendor on this second one.
 func EX2UDecodeTempCelsius(reply []byte) (int, error) {
 	f, err := EX2UDecodeTempFahrenheit(reply)
 	if err != nil {
 		return 0, err
 	}
-	return int(math.Round(float64(f-32) * 5 / 9)), nil
+	return (f - 32) * 5 / 9, nil
 }
 
 // EX2ULEDStates lists the CLI vocabulary EX2ULEDFrame/the `-l` command

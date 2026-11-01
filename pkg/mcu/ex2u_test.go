@@ -66,31 +66,50 @@ func TestEX2UFrames(t *testing.T) {
 // (host MCEX2U-Debian) running this tool's own -t alongside a
 // simultaneous `mcu_ctl tmp_get_c`, which reported "Temperature: 30
 // C" - see EX2UDecodeTempFahrenheit's doc comment for the reasoning.
-func TestEX2UDecodeTempCelsius_RealCapturedReply(t *testing.T) {
-	reply := []byte{0xFA, 0x03, 0x08, 0x00, 0x00, 0x56, 0xFB, 0xFA}
-	c, err := EX2UDecodeTempCelsius(reply)
-	if err != nil {
-		t.Fatalf("EX2UDecodeTempCelsius(% X): %v", reply, err)
+// Two independent live captures, taken minutes apart on the same
+// real EX2U hardware alongside a simultaneous `mcu_ctl tmp_get_c`:
+// the first (86°F / 0x56) reported "Temperature: 30 C" - where
+// rounding and truncation happen to agree, so it couldn't by itself
+// distinguish the two. The second (84°F / 0x54) reported
+// "Temperature: 28 C", where they disagree (round -> 29, truncate ->
+// 28) - confirming the vendor truncates rather than rounds. See
+// EX2UDecodeTempCelsius's doc comment.
+func TestEX2UDecodeTempCelsius_RealCapturedReplies(t *testing.T) {
+	cases := []struct {
+		reply []byte
+		wantF int
+		wantC int
+	}{
+		{[]byte{0xFA, 0x03, 0x08, 0x00, 0x00, 0x56, 0xFB, 0xFA}, 86, 30},
+		{[]byte{0xFA, 0x03, 0x08, 0x00, 0x00, 0x54, 0xFB, 0xFA}, 84, 28},
 	}
-	if c != 30 {
-		t.Errorf("EX2UDecodeTempCelsius(% X) = %d, want 30", reply, c)
-	}
-	f, err := EX2UDecodeTempFahrenheit(reply)
-	if err != nil {
-		t.Fatalf("EX2UDecodeTempFahrenheit(% X): %v", reply, err)
-	}
-	if f != 86 {
-		t.Errorf("EX2UDecodeTempFahrenheit(% X) = %d, want 86", reply, f)
+	for _, c := range cases {
+		gotF, err := EX2UDecodeTempFahrenheit(c.reply)
+		if err != nil {
+			t.Fatalf("EX2UDecodeTempFahrenheit(% X): %v", c.reply, err)
+		}
+		if gotF != c.wantF {
+			t.Errorf("EX2UDecodeTempFahrenheit(% X) = %d, want %d", c.reply, gotF, c.wantF)
+		}
+		gotC, err := EX2UDecodeTempCelsius(c.reply)
+		if err != nil {
+			t.Fatalf("EX2UDecodeTempCelsius(% X): %v", c.reply, err)
+		}
+		if gotC != c.wantC {
+			t.Errorf("EX2UDecodeTempCelsius(% X) = %d, want %d", c.reply, gotC, c.wantC)
+		}
 	}
 }
 
-// Plain rounding-correctness checks, independent of any hardware
-// capture: (F-32)*5/9 rounded to the nearest whole degree.
-func TestEX2UDecodeTempCelsius_Rounding(t *testing.T) {
+// Plain truncating-integer-division checks, independent of any
+// hardware capture: (F-32)*5/9 truncated toward zero, matching the
+// vendor's own C-style integer arithmetic (see
+// TestEX2UDecodeTempCelsius_RealCapturedReplies).
+func TestEX2UDecodeTempCelsius_Truncation(t *testing.T) {
 	cases := map[byte]int{
 		85: 29, // (85-32)*5/9 = 29.44 -> 29
 		86: 30, // exact
-		87: 31, // (87-32)*5/9 = 30.56 -> 31
+		87: 30, // (87-32)*5/9 = 30.56 -> truncates to 30, not 31
 		32: 0,  // freezing
 	}
 	for fahrenheit, want := range cases {
