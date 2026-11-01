@@ -6,10 +6,14 @@ vendor binaries (extracted from each board's own rescue `uRamdisk`)
 via disassembly (`objdump`/`readelf`, plus direct byte extraction from
 the compiled command tables - see "Extraction method"), not from any
 vendor documentation. Confidence varies per section; each one says so
-explicitly. Where EX2U's protocol was additionally confirmed on real
-hardware (live `strace` capture, end-to-end kernel-driver test), that
-is called out - EX2/EX4's protocol below is **not yet** hardware
--confirmed, only statically decoded.
+explicitly. Where a claim was additionally confirmed on real hardware
+(live `strace`/register captures, or an end-to-end kernel-driver
+test), that is called out explicitly at the point it applies -
+substantial parts of EX2 now are (power LED, HD-bay LED, fan level
+order, fan RPM read-back - each found the hard way, often after an
+earlier "statically decoded" guess turned out wrong on real
+hardware); EX4 and the rest of EX2's own protocol remain only
+statically decoded, no hardware available to test them.
 
 **Never guess a frame layout you don't have evidence for.** Where this
 document says a command's wire format is not confirmed, wd-control-
@@ -267,9 +271,16 @@ this tool deliberately does not reimplement or depend on:
   neither its own `FA...FB`-or-otherwise framing nor how one reply is
   matched to the request that triggered it.
 
-**Consequence for wd-control-tool**: every command in this tool is
-fire-and-forget, with no read-back or acknowledgement. This is a
-known, deliberate v1 limitation, not an oversight - see "Unresolved".
+**Consequence for wd-control-tool**: almost every command in this
+tool is fire-and-forget, with no read-back or acknowledgement - a
+known, deliberate limitation, not an oversight (see "Unresolved").
+Two exceptions, both added later via a live capture rather than
+decoding the general mechanism above: EX2U's temperature (`-t`,
+"EX2U protocol") and EX2's fan RPM (`-f rpm`, "Fan status
+read-back") - each decodes one specific reply shape it happens to
+share with its own request frame, not the general reply-framing
+problem described above, which remains unsolved for everything
+else.
 
 ## Fan control
 

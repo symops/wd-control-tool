@@ -6,8 +6,9 @@ display control stack on three WD My Cloud boards - EX2 Ultra
 `fan_control`/`rtc`/`led`/`up_send_ctl` plus their supporting daemons
 (`xmldb`, `up_read_daemon`, `up_send_daemon`) and vendor `.so` stack
 (EX2/EX4) with one tool that talks to the hardware directly: the
-front-panel MCU over UART, and `/dev/mem`-mapped registers for LEDs
-and EX2's fan.
+front-panel MCU over UART (including EX2's power LED - confirmed
+MCU-driven, not the GPIO path HD-bay/EX4's power LED and EX2's fan
+use), and `/dev/mem`-mapped registers otherwise.
 
 Motivation: get rid of a pile of outdated proprietary libraries and
 daemons just to blink an LED or spin a fan - no vendor `.so`, no XML
@@ -15,9 +16,10 @@ config daemon, no message-queue relay, no `/tmp` file polling.
 
 See `SPEC.md` for the full, reverse-engineered hardware reference
 this implementation follows - including what is still unconfirmed
-or unimplemented (most notably: this tool cannot yet read anything
-back from either board's MCU - every command is fire-and-forget; see
-SPEC.md, "Request/response and acknowledgement").
+or unimplemented. Most MCU commands remain fire-and-forget (no reply
+ever parsed), but two reads are now confirmed and implemented:
+EX2U's temperature (`-t`) and EX2's fan RPM (`-f rpm`) - see SPEC.md,
+"Request/response and acknowledgement".
 
 ## Download
 
