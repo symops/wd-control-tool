@@ -8,8 +8,11 @@
 // meaningful to assert on a pty anyway - the point of this harness is
 // verifying frame CONTENT and ORDER, not real UART timing); Master is
 // what a test reads from (to see exactly what the tool transmitted)
-// and can write to (to script a fake MCU reply, for the day this
-// project decodes the reply framing - see SPEC.md, "unresolved").
+// and can write to, to script a fake MCU reply - now routinely used
+// for that (EX2U's temperature reply, EX2's fan RPM reply - both
+// decoded via a live capture; see pkg/mcu/ex2u_test.go's/ex2_test.go's
+// own *Reply tests), not just a someday-maybe as this comment used to
+// say. Most MCU replies remain undecoded - see SPEC.md, "unresolved".
 package fakemcu
 
 import (
