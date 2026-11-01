@@ -2,6 +2,8 @@ package mcu
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -50,6 +52,28 @@ func TestOpen_UnsupportedBaud(t *testing.T) {
 func TestOpen_NonexistentPath(t *testing.T) {
 	if _, err := Open("/nonexistent/wd-control-tool-mcu-test-path", 19200); err == nil {
 		t.Error("Open on a nonexistent path: want error, got nil")
+	}
+}
+
+// Open wraps os.OpenFile's error with %w ("mcu: open %s: %w"), so a
+// caller should be able to tell "the device doesn't exist" (e.g. a
+// wrong --serial path, exactly what happened on real EX2U hardware
+// where the real uart1 node turned out not to be /dev/ttyS1 - see
+// SPEC.md's Unresolved #7) apart from other failure modes via
+// errors.Is/As, not just by matching the error string. Confirm the
+// %w wrapping actually preserves that, rather than just assuming
+// fmt.Errorf's %w verb works here the way it's supposed to.
+func TestOpen_NonexistentPath_ErrorIsOsErrNotExist(t *testing.T) {
+	_, err := Open("/nonexistent/wd-control-tool-mcu-test-path", 19200)
+	if err == nil {
+		t.Fatal("Open on a nonexistent path: want error, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Open error = %v, want errors.Is(err, os.ErrNotExist) to hold", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Errorf("Open error = %v, want errors.As(err, &os.PathError{}) to hold (the real failing path should be recoverable)", err)
 	}
 }
 
