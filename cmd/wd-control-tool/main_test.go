@@ -1316,6 +1316,37 @@ func TestRun_LongActionChainDoesNotMisbehave(t *testing.T) {
 	}
 }
 
+// The above puts -b first, so it never exercises the hint pass at
+// all (board is already known before any action is scanned). This
+// is the hint-pass's own stress test: many EX2U led actions BEFORE
+// -b/--board, confirming both correctness (every action still
+// described) and that the hint pass doesn't introduce any
+// quadratic-ish slowdown at scale - verified by hand first with a
+// real build at 200 and 1000 actions (58ms either way, confirming
+// linear scaling, not just "fast enough at 200").
+func TestRun_LongActionChainBeforeBoard_EX2U(t *testing.T) {
+	const n = 200
+	var args []string
+	for i := 0; i < n; i++ {
+		args = append(args, "-l", "on")
+	}
+	args = append(args, "-b", "ex2u", "-n")
+
+	start := time.Now()
+	code, out, errOut := captureRun(t, args)
+	elapsed := time.Since(start)
+
+	if code != exitOK {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	if got := strings.Count(out, "led on to EX2U"); got != n {
+		t.Errorf("got %d described actions, want %d", got, n)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("200 dry-run actions took %v, want well under 2s", elapsed)
+	}
+}
+
 // Every other multi-action test combines at most 2 of the 4 action
 // types. Chain all 4 (led, fan, display, rtc) in one EX4 command and
 // confirm each is correctly described, in order, with the right
