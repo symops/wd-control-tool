@@ -96,8 +96,28 @@ func (s State) String() string {
 const (
 	powerDataOut = 0xF1010100
 	powerBlinkEn = 0xF1010108
-	hdBayDataOut = 0xF1010140
-	hdBayBlinkEn = 0xF1010148
+
+	// hdBayDataOut/hdBayBlinkEn: CORRECTED from 0xF1010140/0xF1010148
+	// after a real-hardware failure report (hd0/hd1 blue AND red both
+	// had no physical effect through this tool, despite the vendor's
+	// own `led hd0/hd1 ... on/off` working). A live strace of the
+	// vendor tool for `led hd0 red on` (confirmed to light the LED)
+	// showed its one `mmap2` of `/dev/mem` mapping page `0xF1018000` -
+	// not `0xF1010000`. That's the SAME page `pkg/fan/ex2.go`'s
+	// confirmed `ex2FanReg1`/`ex2FanReg2` (`0xf1018100`/`0xf1018140`)
+	// already live in, strongly suggesting the original value here
+	// was a single-digit transcription slip (`0x10` for `0x18`) during
+	// this project's own disassembly extraction, not a different
+	// physical window. `0xF1018140`/`0xF1018148` keeps the exact same
+	// byte offsets within the page (`0x140`/`0x148`) the OLD, wrong
+	// 0xF1010xxx values used - the EXACT bit offset within the
+	// corrected page has NOT been independently confirmed via a
+	// register readback (only the PAGE is confirmed by the mmap
+	// capture) - this is a strong, evidence-based hypothesis pending
+	// real-hardware confirmation, not yet a fully proven address. See
+	// SPEC.md, "LED (EX2/EX4)".
+	hdBayDataOut = 0xF1018140
+	hdBayBlinkEn = 0xF1018148
 
 	redBit  = uint32(1) << 28
 	blueBit = uint32(1) << 29

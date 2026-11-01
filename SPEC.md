@@ -371,13 +371,30 @@ textbook `/dev/mem` pattern: `open64("/dev/mem", O_RDWR|O_SYNC)`,
 `close`); now **confirmed on real EX2 hardware** too - a live strace
 of the real `led` tool for `led hd0/hd1 blue/red on/off` shows exactly
 4 `openat(.../dev/mem...)` calls per command (read+write, clear+set -
-see "on"/"off" below), matching this mechanism. The exact register
-addresses/bits below are still only statically decoded, not directly
-read back on real hardware.
+see "on"/"off" below), matching this mechanism.
+
+**Register page: CORRECTED from `0xF1010140`/`0xF1010148`** after a
+real-hardware failure report (neither color on hd0/hd1 had any
+physical effect through this tool, despite the vendor's own `led
+hd0/hd1 ... on/off` working). A live strace of the real, working
+`led hd0 red on` showed its `mmap2` of `/dev/mem` mapping page
+`0xF1018000`, not `0xF1010000` - the SAME page `pkg/fan/ex2.go`'s
+confirmed `ex2FanReg1`/`ex2FanReg2` (`0xf1018100`/`0xf1018140`)
+already live in. The original `0xF1010140`/`0xF1010148` was almost
+certainly a single-digit transcription slip (`0x10` for `0x18`)
+during this project's own disassembly extraction. `0xF1018140`/
+`0xF1018148` keeps the exact same in-page byte offsets (`0x140`/
+`0x148`) the old, wrong values used - **the page is now confirmed by
+the mmap capture, but the exact bit offset within it is still only a
+strong hypothesis, not independently confirmed via a register
+readback** (a `busybox devmem` read of the OLD address, before and
+after the real, working `led hd0 red on`, showed `0x00000000` both
+times either way - consistent with the old address being entirely
+wrong, but not yet positive confirmation the new one is right).
 
 | LED | Data-Out | Blink-Enable | Red bit | Blue bit |
 |---|---|---|---|---|
-| HD-bay (bay N, N=0..3) | `0xF1010140` | `0xF1010148` | bit `13+N` | **unconfirmed, see below** |
+| HD-bay (bay N, N=0..3) | `0xF1018140` | `0xF1018148` | bit `13+N` | **unconfirmed, see below** |
 
 - `on`: clear the other color's bit in both registers (the two colors
   on one zone are mutually exclusive - one bi-color LED), then set own
