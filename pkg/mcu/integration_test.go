@@ -185,9 +185,10 @@ func TestEX4_RequestDateAndTime_OverPTY(t *testing.T) {
 // valid values (via rtc.EX4Writer.Set), which covers it in the
 // combined -coverpkg=./pkg/... view, but pkg/mcu's own test suite
 // never called it with anything but an invalid month. This project's
-// own house rule (see BUILDING.md on EX4's SetDateAndTime/FanLevel
-// coverage history) is specifically to not lean on a different
-// package's tests for a package's own exported method.
+// own house rule is specifically to not lean on a different package's
+// tests for a package's own exported method - each package's test
+// suite covers its own exported surface directly, same reasoning as
+// FanLevel's error-propagation test just above.
 func TestEX4_SetDateAndTime_OverPTY(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX4(OpenFile(fake.Slave))
