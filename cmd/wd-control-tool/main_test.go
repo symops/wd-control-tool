@@ -2080,8 +2080,9 @@ func TestRun_AllFourActionTypesChained(t *testing.T) {
 // EX4's fan/display/rtc actions all go over the MCU/UART path, which
 // --serial lets a test redirect to a fakemcu pty; EX4's led action
 // goes over real /dev/mem instead (no CLI override exists for that -
-// see BUILDING.md on why no automated test opens a real /dev/mem),
-// so led is intentionally left out of this real-run chain.
+// see BUILDING.md on why no automated test does real register I/O
+// against /dev/mem), so led is intentionally left out of this
+// real-run chain.
 func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) {
 	fake := fakemcu.New(t)
 
