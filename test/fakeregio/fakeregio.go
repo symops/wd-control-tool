@@ -8,7 +8,7 @@
 // whole address space as the file's contents; a plain file mmaps the
 // same way as long as it is at least as large as the highest
 // offset+length you map. The register addresses this tool cares
-// about (0xF1010100..0xF1018148) are all under 4GiB, so truncating a
+// about (0xF1010100..0xF1018150) are all under 4GiB, so truncating a
 // temp file up to a bit past the highest address used gives an
 // mmap-compatible stand-in. The file is created sparse (ftruncate,
 // not actually written), so this costs no real disk space - only the
@@ -23,7 +23,7 @@ import (
 )
 
 // highWaterMark covers every physical address pkg/led and pkg/fan
-// currently use (0xF1010148, 0xF1018140) plus margin for future
+// currently use (0xF1010108, 0xF1018150) plus margin for future
 // registers in the same window.
 const highWaterMark = 0xF1030000
 
