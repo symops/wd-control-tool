@@ -95,7 +95,7 @@ func arityFor(mode string, b board.Board) int {
 }
 
 // parseArgs is a small hand-rolled parser, not the stdlib flag
-// package: each mode flag (-l/-f/-r/-d) consumes a fixed number of
+// package: each mode flag (-l/-f/-r/-d/-t) consumes a fixed number of
 // the following tokens as its own argument list (see arityFor), so
 // several actions can be chained in one invocation and no delimiter
 // flag is needed between a mode flag and its arguments, or between

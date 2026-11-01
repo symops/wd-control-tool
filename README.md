@@ -36,7 +36,7 @@ of its real silicon. Copy the matching binary to the board and
 wd-control-tool -b ex2u -f 50                        # EX2U: 50% duty cycle
 wd-control-tool -b ex2u -l breathing                 # EX2U: status LED breathing
 
-wd-control-tool -b ex2 -f 3                           # EX2: ~6000rpm step (see SPEC.md - exact step order not independently confirmed)
+wd-control-tool -b ex2 -f 3                           # EX2: 6521rpm step (hardware-confirmed - see SPEC.md's "Fan control")
 wd-control-tool -b ex2 --led power blue on
 
 wd-control-tool -b ex4 -f 2                            # EX4: Medium
@@ -54,10 +54,10 @@ wd-control-tool -b ex4 -n -D --led power blue on       # preview the exact bytes
   usage error, not a way to switch boards partway through one
   command).
 - Each action is one of `-l/--led`, `-f/--fan`, `-r/--rtc`,
-  `-d/--display`, followed directly by its own fixed number of
-  arguments (no delimiter needed - see the table below). Several
-  actions can be chained in one command and run in the order given;
-  the same action may repeat.
+  `-d/--display`, `-t/--temp`, followed directly by its own fixed
+  number of arguments (no delimiter needed - see the table below).
+  Several actions can be chained in one command and run in the order
+  given; the same action may repeat.
 - `-n`, `--dry-run` - print what would be done, touch no hardware.
   May appear anywhere, applies to every action in the command. Exits
   0 whenever the simulation itself completed, even if it reports that
