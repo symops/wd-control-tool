@@ -932,6 +932,50 @@ func TestRun_DryRun_EX2FanRPM(t *testing.T) {
 	}
 }
 
+// The debug-print branch (printing "debug: reply=...") had no
+// coverage - every other -f rpm test used either dry-run (which
+// never reaches apply() at all) or a real run without -D.
+func TestRun_RealRun_EX2FanRPM_DebugPrintsRawReplyBytes(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildAction(board.EX2, "fan", fake.SlavePath, []string{"rpm"}, true)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the FanStatusGet request
+	reply := []byte{0xFA, 0x03, 0x09, 0x00, 0x00, 0x3A, 0xFB}
+	if _, err := fake.Master.Write(reply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "debug: reply=FA 03 09 00 00 3A FB") {
+		t.Errorf("stdout=%q, want the raw reply debug line", out)
+	}
+	if !strings.Contains(out, "fan rpm = 5172") {
+		t.Errorf("stdout=%q, want the decoded RPM line too", out)
+	}
+}
+
 // Mirrors TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes but for the
 // outcome every real capture of this command has actually shown so
 // far: nothing comes back. Confirms apply() reports that plainly
@@ -982,6 +1026,9 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 		{"-b", "ex2u", "--serial", bad, "-l", "on"}, // same gap, EX2U's led apply()
 		{"-b", "ex4", "--serial", bad, "-d", "hi"},
 		{"-b", "ex4", "--serial", bad, "-r", "write"},
+		{"-b", "ex2", "--serial", bad, "-f", "rpm"},                // same gap, buildEX2FanRPMAction's apply()
+		{"-b", "ex2", "--serial", bad, "-l", "power", "red", "on"}, // same gap, buildEX2PowerLEDAction's apply()
+		{"-b", "ex2u", "--serial", bad, "-t"},                      // same gap, buildTempAction's apply()
 	}
 	for _, args := range cases {
 		code, _, errOut := captureRun(t, args)
