@@ -18,3 +18,16 @@ type Controller interface {
 	// hardware natively uses (see the per-board doc comments).
 	Set(level int) error
 }
+
+// Compile-time check that every per-board type actually satisfies
+// Controller - nothing else in this codebase currently asserts this
+// (cmd/wd-control-tool/main.go calls each board's MCU/regio client
+// directly rather than through this interface), so a signature change
+// on any one of them drifting out of sync with Controller would
+// otherwise go unnoticed until/unless something tried to use it
+// through the interface.
+var (
+	_ Controller = EX2{}
+	_ Controller = EX2U{}
+	_ Controller = EX4{}
+)
