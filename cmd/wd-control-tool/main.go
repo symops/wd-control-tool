@@ -77,7 +77,7 @@ func modeNameFor(flag string) string {
 // mistaken for a flag). led's arity depends on the board: EX2U's
 // status LED takes one STATE word, EX2/EX4's zone/color/state scheme
 // takes three. temp takes no arguments at all - it just requests and
-// prints whatever raw reply comes back (see buildTempAction).
+// prints the decoded temperature (see buildTempAction).
 func arityFor(mode string, b board.Board) int {
 	switch mode {
 	case "fan", "display", "rtc":
@@ -315,7 +315,7 @@ func run(args []string) int {
 	// the rest - runAction only ever returns a non-exitOK code in
 	// that case, since under -n it always reports and returns 0.
 	for _, pa := range opts.actions {
-		act, code := buildAction(b, pa.mode, opts.serial, pa.args)
+		act, code := buildAction(b, pa.mode, opts.serial, pa.args, opts.debug)
 		if act == nil {
 			return code
 		}
@@ -411,7 +411,7 @@ func runAction(a *action, dryRun, debug bool) int {
 // (unknown zone/color/state names, level out of range, "rtc"'s only
 // recognized subcommand) is a value problem, reported via
 // action.planErr so -n can still describe it as "would fail".
-func buildAction(b board.Board, mode, serialPath string, args []string) (*action, int) {
+func buildAction(b board.Board, mode, serialPath string, args []string, debug bool) (*action, int) {
 	switch mode {
 	case "fan":
 		return buildFanAction(b, serialPath, args)
@@ -422,7 +422,7 @@ func buildAction(b board.Board, mode, serialPath string, args []string) (*action
 	case "rtc":
 		return buildRTCAction(b, serialPath, args)
 	case "temp":
-		return buildTempAction(b, serialPath, args)
+		return buildTempAction(b, serialPath, args, debug)
 	default:
 		panic("unreachable mode " + mode)
 	}
@@ -628,18 +628,16 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 // capture, where the reply arrived well under 1s.
 const ex2uTempReplyTimeout = 2 * time.Second
 
-// buildTempAction sends EX2U's tmp_get request, always prints the
-// raw reply bytes, and additionally prints the decoded Celsius value
-// when the reply matches the confirmed frame shape (see
-// mcu.EX2UDecodeTempCelsius) - matching the vendor tmp_get_c's own
-// "Temperature: N C" wording. The raw line is kept even on a
-// successful decode: unlike every other command here, this one's
-// reply shape rests on a single hardware capture (see SPEC.md's
-// Unresolved #1), not an independent decompile, so showing the bytes
-// that produced the decoded value costs nothing and keeps that
-// honest. EX2U-only: no temp command is documented for EX2/EX4's
-// legacy protocol (see SPEC.md's command tables).
-func buildTempAction(b board.Board, serialPath string, args []string) (*action, int) {
+// buildTempAction sends EX2U's tmp_get request and prints the
+// decoded Celsius value (see mcu.EX2UDecodeTempCelsius) - matching
+// the vendor tmp_get_c's own "Temperature: N C" wording. The raw
+// reply bytes are NOT printed by default (-D/--debug already exists
+// for exactly that - no need for a second, always-on way to see
+// them); if decoding ever fails on a real device, the error message
+// points at -D rather than dumping the bytes unconditionally.
+// EX2U-only: no temp command is documented for EX2/EX4's legacy
+// protocol (see SPEC.md's command tables).
+func buildTempAction(b board.Board, serialPath string, args []string, debug bool) (*action, int) {
 	if b != board.EX2U {
 		return unsupportedErr("temp is not supported on board %v", b)
 	}
@@ -657,14 +655,23 @@ func buildTempAction(b board.Board, serialPath string, args []string) (*action, 
 			if err != nil {
 				return err
 			}
+			if debug {
+				fmt.Printf("debug: reply=% X\n", reply)
+			}
 			if len(reply) == 0 {
 				fmt.Printf("temp: no reply from MCU within %v\n", ex2uTempReplyTimeout)
 				return nil
 			}
-			fmt.Printf("temp: raw reply: % X\n", reply)
-			if c, derr := mcu.EX2UDecodeTempCelsius(reply); derr == nil {
-				fmt.Printf("Temperature: %d C\n", c)
+			c, derr := mcu.EX2UDecodeTempCelsius(reply)
+			if derr != nil {
+				// derr's own text embeds the raw reply bytes (see
+				// EX2UDecodeTempFahrenheit) - not printed here so
+				// -D stays the only way to see them, same as the
+				// success path above.
+				fmt.Println("temp: couldn't decode a temperature from the MCU's reply (run with -D to see the raw bytes)")
+				return nil
 			}
+			fmt.Printf("Temperature: %d C\n", c)
 			return nil
 		},
 	}, exitOK

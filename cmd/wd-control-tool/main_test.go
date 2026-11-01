@@ -723,10 +723,15 @@ func TestRun_Temp_UnsupportedOnOtherBoards(t *testing.T) {
 // the test's own goroutine). Running a.apply() (no *testing.T calls
 // inside it) in the background goroutine instead, with the fakemcu
 // interaction kept on the main test goroutine, avoids that entirely.
-func TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes(t *testing.T) {
+//
+// Confirms the DEFAULT (non-debug) output for a reply that doesn't
+// match the confirmed frame shape: no raw bytes (that's what -D is
+// for - see TestRun_RealRun_EX2UTemp_DebugPrintsRawReplyBytes), just
+// a plain message pointing at -D, and no decoded Temperature line.
+func TestRun_RealRun_EX2UTemp_UndecodableReplyPrintsPlainMessage(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil)
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil, false)
 	if code != exitOK || a == nil {
 		t.Fatalf("buildTempAction: code=%d", code)
 	}
@@ -755,23 +760,71 @@ func TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes(t *testing.T) {
 	os.Stdout = origOut
 	out := <-outCh
 
-	if !strings.Contains(out, "11 22 33") {
-		t.Errorf("stdout=%q, want the raw reply bytes printed", out)
+	if strings.Contains(out, "11 22 33") {
+		t.Errorf("stdout=%q, raw bytes must not be printed without -D", out)
+	}
+	if !strings.Contains(out, "-D") {
+		t.Errorf("stdout=%q, want the plain message to point at -D", out)
 	}
 	if strings.Contains(out, "Temperature:") {
 		t.Errorf("stdout=%q, a reply that doesn't match the confirmed frame shape must not print a decoded Temperature line", out)
 	}
 }
 
+// Same undecodable reply, but with -D: confirms the raw bytes now
+// show up as a single "debug: reply=..." line (matching the existing
+// "debug: frame=..." request-side line's style - not a second,
+// differently-worded line), and ONLY as that one line, not duplicated
+// anywhere else in the output.
+func TestRun_RealRun_EX2UTemp_DebugPrintsRawReplyBytes(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil, true)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildTempAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the tmp_get request
+	if _, err := fake.Master.Write([]byte{0x11, 0x22, 0x33}); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "debug: reply=11 22 33") {
+		t.Errorf("stdout=%q, want a single \"debug: reply=...\" line with the raw bytes", out)
+	}
+	if n := strings.Count(out, "11 22 33"); n != 1 {
+		t.Errorf("stdout=%q, raw bytes appeared %d times, want exactly 1 (no duplication)", out, n)
+	}
+}
+
 // End-to-end CLI version of TestEX2UDecodeTempCelsius_RealCapturedReply:
 // feeds the exact bytes captured on real EX2U hardware and confirms
-// buildTempAction's apply() prints BOTH the raw bytes and the
-// decoded "Temperature: 30 C" line, matching the vendor tmp_get_c's
-// own wording.
+// the default (non-debug) output is exactly the decoded
+// "Temperature: 30 C" line, matching the vendor tmp_get_c's own
+// wording - with no raw-bytes line alongside it.
 func TestRun_RealRun_EX2UTemp_DecodesRealCapturedReply(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil)
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil, false)
 	if code != exitOK || a == nil {
 		t.Fatalf("buildTempAction: code=%d", code)
 	}
@@ -801,8 +854,8 @@ func TestRun_RealRun_EX2UTemp_DecodesRealCapturedReply(t *testing.T) {
 	os.Stdout = origOut
 	out := <-outCh
 
-	if !strings.Contains(out, "FA 03 08 00 00 56 FB FA") {
-		t.Errorf("stdout=%q, want the raw reply bytes printed", out)
+	if strings.Contains(out, "FA 03 08 00 00 56 FB FA") {
+		t.Errorf("stdout=%q, raw reply bytes must not be printed without -D", out)
 	}
 	if !strings.Contains(out, "Temperature: 30 C") {
 		t.Errorf("stdout=%q, want the decoded \"Temperature: 30 C\" line", out)
@@ -817,7 +870,7 @@ func TestRun_RealRun_EX2UTemp_DecodesRealCapturedReply(t *testing.T) {
 func TestRun_RealRun_EX2UTemp_NoReplyPrintsNoReplyMessage(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil)
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil, false)
 	if code != exitOK || a == nil {
 		t.Fatalf("buildTempAction: code=%d", code)
 	}
@@ -1282,7 +1335,7 @@ func TestBuildAction_PanicsOnUnknownMode(t *testing.T) {
 			t.Errorf("panic value = %v, want a message mentioning the unknown mode", r)
 		}
 	}()
-	buildAction(board.EX4, "bogus", "/dev/ttyS1", nil)
+	buildAction(board.EX4, "bogus", "/dev/ttyS1", nil, false)
 }
 
 // buildFanAction/buildLEDAction's own "unsupported board" default
