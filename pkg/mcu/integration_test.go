@@ -17,6 +17,39 @@ import (
 // golden-byte tests on the frame bytes alone would not catch it; this
 // would.
 
+// Regression test for the exact bug this project shipped on real
+// hardware: EX2U's sendBytes used to sleep 100ms between each of the
+// 7 bytes (~700ms per frame) based on a never-actually-verified
+// assumption that this was "the real hardware's own margin" (see
+// SPEC.md's EX2U protocol section and ex2u.go's own doc comment for
+// the full story). A live strace of the real, working mcu_ctl showed
+// no deliberate delay at all - sending 200x slower than that let
+// every write() succeed with no I/O error while the Welltrend MCU's
+// own frame-reception state machine most likely timed out between
+// bytes, so the fan simply never responded, with nothing anywhere
+// reporting an error. Pin that a real frame send completes in well
+// under what a 100ms/byte pacing would need (700ms for 7 bytes), so
+// a future regression back to an artificial per-byte delay fails
+// loudly here instead of silently shipping to real hardware again.
+func TestEX2U_FanPercent_HasNoDeliberateInterByteDelay(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2U(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- m.FanPercent(50) }()
+
+	fake.ReadFrame(t, 7, 3*time.Second)
+	elapsed := time.Since(start)
+	if err := <-done; err != nil {
+		t.Fatalf("FanPercent(50): %v", err)
+	}
+
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("sending a 7-byte EX2U frame took %v, want well under 100ms (no deliberate inter-byte delay) - a 100ms/byte pacing regression would take ~700ms and silently break real hardware the way it already did once", elapsed)
+	}
+}
+
 func TestEX2U_FanPercent_OverPTY(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2U(OpenFile(fake.Slave))
