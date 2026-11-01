@@ -94,3 +94,46 @@ func TestPort_SendBytes_ConcurrentFramesNeverInterleave(t *testing.T) {
 		}
 	}
 }
+
+// Port.Close takes mu like every other method, so it should be safe
+// to race against in-flight sendBytes calls the same way
+// regio.Mem.Close is (see pkg/regio/regio_test.go's
+// TestMem_ConcurrentAccessIsRaceFree, which found and fixed a case
+// where an earlier version of that test claimed to test a concurrent
+// Close but actually ran it strictly after everything else - this
+// test is written to genuinely race from the start, avoiding that
+// mistake here). Several goroutines repeatedly call sendBytes while
+// one, started at the same time rather than afterward, calls Close -
+// once Close wins that race, later sendBytes calls legitimately
+// start failing (the file is gone), which is expected and not a
+// failure; only a genuine race (caught by -race) or a panic should
+// fail this test.
+func TestPort_Close_ConcurrentWithSendBytesIsRaceFree(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+	frame := []byte{0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC}
+
+	var wg sync.WaitGroup
+	const senders = 5
+	wg.Add(senders)
+	for i := 0; i < senders; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				if err := p.sendBytes(frame, nil); err != nil {
+					return // expected once Close() has won the race
+				}
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := p.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	wg.Wait()
+}
