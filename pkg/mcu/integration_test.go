@@ -3,6 +3,7 @@ package mcu
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -279,5 +280,57 @@ func TestEX2_AllMethods_OverPTY(t *testing.T) {
 				t.Errorf("%s wire bytes = % X, want % X", c.name, got, c.want)
 			}
 		})
+	}
+}
+
+// Same property as TestEX2U_LEDOnOff_ConcurrentCallsNeverInterleave,
+// for the legacy protocol family's own real methods: two goroutines
+// repeatedly calling DeviceReady() and FanLevel(2) (both 7-byte
+// frames, distinguishable by their differing header/value bytes) on
+// one shared *EX4 - no interleaved byte run must ever appear on the
+// wire. The legacy protocol's 10us/byte pacing is negligible, so
+// this runs fast unlike its EX2U counterpart.
+func TestEX4_DeviceReadyAndFanLevel_ConcurrentCallsNeverInterleave(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX4(OpenFile(fake.Slave))
+
+	const rounds = 25
+	var wg sync.WaitGroup
+	callErrs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := m.DeviceReady(); err != nil {
+				callErrs <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := m.FanLevel(2); err != nil {
+				callErrs <- err
+				return
+			}
+		}
+	}()
+
+	got := fake.ReadFrame(t, rounds*2*7, 5*time.Second)
+
+	wg.Wait()
+	close(callErrs)
+	for err := range callErrs {
+		t.Fatalf("DeviceReady/FanLevel: %v", err)
+	}
+
+	deviceReady := []byte{0xFA, 0x03, 0x01, 0x00, 0x00, 0x00, 0xFB}
+	fanLevel2 := []byte{0xFA, 0x02, 0x00, 0x02, 0x00, 0x00, 0xFB}
+	for i := 0; i < len(got); i += 7 {
+		chunk := got[i : i+7]
+		if !bytes.Equal(chunk, deviceReady) && !bytes.Equal(chunk, fanLevel2) {
+			t.Fatalf("byte run at offset %d is neither a clean DeviceReady nor FanLevel(2) frame (interleaved): % X", i, chunk)
+		}
 	}
 }
