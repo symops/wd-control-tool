@@ -254,6 +254,35 @@ func TestRun_MultipleActions_EarlierActionAlreadyAppliedBeforeLaterUnsupportedSt
 	}
 }
 
+// Contrasts with
+// TestRun_MultipleActions_EarlierActionAlreadyAppliedBeforeLaterUnsupportedStopsChain:
+// a syntax error (here, -l at the end of the command with no STATE
+// argument after it) is caught entirely within parseArgs, BEFORE
+// run() ever starts looping over actions - so unlike an "unsupported
+// on this board" error (caught later, during dispatch, only after
+// any earlier action has already run for real), a syntax error
+// anywhere in a chain aborts the whole command atomically, including
+// actions placed earlier that were themselves perfectly valid.
+//
+// Proven without needing a real or fake serial port at all: --serial
+// points at a path that cannot exist, so if the fan action (listed
+// first, and syntactically valid on its own) ever actually reached
+// its apply() step, mcu.Open would fail and this would exit
+// exitHardwareIO (3) instead - the same way
+// TestRun_RealRun_HardwareIOErrorOnBadSerialPath proves that path
+// fails cleanly when it IS reached. Getting exitUsage (1) here
+// instead proves the fan action's apply() was never even attempted.
+func TestRun_ChainWithTrailingSyntaxError_AbortsBeforeAnyActionRuns(t *testing.T) {
+	bad := "/nonexistent/wd-control-tool-test-path"
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", bad, "-f", "50", "-l"})
+	if code != exitUsage {
+		t.Fatalf("code=%d, want %d (a syntax error, caught before any action runs); err=%q", code, exitUsage, errOut)
+	}
+	if !strings.Contains(errOut, "requires") {
+		t.Errorf("errOut=%q, want it to describe the missing led argument", errOut)
+	}
+}
+
 func TestRun_RepeatedModeFlagAllowed(t *testing.T) {
 	// Chaining the same mode twice is allowed (e.g. two fan levels in
 	// sequence) - nothing in the new grammar needs to forbid it.
