@@ -199,13 +199,19 @@ concurrent pattern for `mcu.Port.Close()`
 (`TestPort_Close_ConcurrentWithSendBytesIsRaceFree`), which had no
 such test before at all.
 
-No automated test opens a real `/dev/mem` (only the sparse-file
-stand-in) or sends traffic over a real UART to actual hardware - by
-design, this suite proves the tool's own logic (frame bytes, register
-math, CLI parsing/validation/exit codes) is correct, not that the
-real MCU or SoC behaves as SPEC.md describes. That still needs real
-hardware (see the project's "на реальном железе посмотим потом" note
-- real-hardware verification is a separate, later step).
+No automated test does real register I/O against `/dev/mem` (only the
+sparse-file stand-in) or sends traffic over a real UART to actual
+hardware - by design, this suite proves the tool's own logic (frame
+bytes, register math, CLI parsing/validation/exit codes) is correct,
+not that the real MCU or SoC behaves as SPEC.md describes. That still
+needs real hardware (see the project's "на реальном железе посмотим
+потом" note - real-hardware verification is a separate, later step).
+(`pkg/regio`'s own `TestOpen_OpensRealDevMem` is a narrow exception:
+it opens and immediately closes the real `/dev/mem`, confirming only
+that `Open()`'s `os.OpenFile` wrapper itself works - it never calls
+`ReadReg32`/`WriteReg32`/`SetClearBits`, so it never touches a single
+physical register, and skips rather than fails where `/dev/mem` isn't
+openable.)
 
 This limit is not hypothetical: real EX2U hardware testing found
 exactly the gap this paragraph warns about. `-b ex2u -f 50` sent the
