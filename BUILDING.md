@@ -301,6 +301,24 @@ not just a level - see `cmd/wd-control-tool/main.go`'s
 `TestEX2DecodeFanRPM_RealCapturedReply` and
 `TestEX2DecodeFanRPM_CrossValidatedAgainstMeasuredLevels`.
 
+A third EX2 LED finding, back on the power LED's MCU path this time:
+`led power red on/off` (and switching between colors generally) was
+intermittently unreliable on real hardware - sometimes needing more
+than one attempt, a failed attempt typically going dark rather than
+landing on either color. `PowerLED` sent its two `NewPWRLed` frames
+back-to-back with no pause at all. A live strace of one successful
+real `led power red on` showed the vendor itself pausing ~400ms
+between the two frames (confirmed via its own write() timestamps); a
+separate, failed attempt showed it instead retrying the first frame
+7 times over ~2.7s before being killed - this protocol has no
+checksum or acknowledgement, so nothing but timing/retries enforces
+delivery. Fixed by adding the same ~400ms pause
+(`pkg/mcu/ex2.go`'s `ex2PowerLEDInterFrameDelay`) - not a retry loop,
+since no full successful multi-attempt sequence was ever captured to
+copy exactly. See `pkg/mcu/ex2_test.go`'s
+`TestEX2_PowerLED_PausesBetweenFrames` (confirms the pause actually
+elapses, the opposite regression from the one this fixes).
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

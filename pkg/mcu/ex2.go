@@ -177,7 +177,24 @@ func EX2PowerLEDFrames(color string, on bool) ([2][]byte, error) {
 	}, nil
 }
 
-// PowerLED sends EX2PowerLEDFrames's two frames in order.
+// ex2PowerLEDInterFrameDelay is the pause between PowerLED's two
+// frames - hardware-confirmed necessary, not cosmetic: sending both
+// back-to-back (as this tool originally did) was intermittently
+// unreliable on real EX2 hardware (confirmed: switching color, or
+// even a fresh on from off, sometimes needed more than one attempt,
+// and a failed switch typically just went dark rather than ending up
+// either color - the "set" frame getting lost while the MCU was
+// presumably still processing "clear"). A live strace of one
+// successful real `led power red on` run showed the vendor tool
+// itself pausing ~400ms between the two frames (39.396806 -> last
+// byte of "clear"; 39.797133 -> first byte of "set") - not 10us
+// (up_send_daemon's otherwise-documented inter-BYTE pacing) and not
+// back-to-back.
+const ex2PowerLEDInterFrameDelay = 400 * time.Millisecond
+
+// PowerLED sends EX2PowerLEDFrames's two frames, pausing
+// ex2PowerLEDInterFrameDelay between them - see that constant's doc
+// comment for why the pause is load-bearing, not cosmetic.
 func (m *EX2) PowerLED(color string, on bool) error {
 	frames, err := EX2PowerLEDFrames(color, on)
 	if err != nil {
@@ -186,5 +203,6 @@ func (m *EX2) PowerLED(color string, on bool) error {
 	if err := sendLegacy(m.p, frames[0]); err != nil {
 		return err
 	}
+	time.Sleep(ex2PowerLEDInterFrameDelay)
 	return sendLegacy(m.p, frames[1])
 }

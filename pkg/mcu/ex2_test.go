@@ -210,6 +210,29 @@ func TestEX2_PowerLED_SendsBothFramesInOrder(t *testing.T) {
 	}
 }
 
+// Regression guard for the opposite mistake fixed here: sending
+// PowerLED's two frames back-to-back (no pause at all) was found
+// unreliable on real hardware - a live strace of one successful
+// `led power red on` showed the vendor itself pausing ~400ms between
+// them. Confirms the pause actually happens rather than silently
+// regressing back to immediate.
+func TestEX2_PowerLED_PausesBetweenFrames(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- m.PowerLED("blue", true) }()
+
+	fake.ReadFrame(t, 14, 3*time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("PowerLED: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < ex2PowerLEDInterFrameDelay {
+		t.Errorf("PowerLED took %v end-to-end, want at least %v (the inter-frame pause)", elapsed, ex2PowerLEDInterFrameDelay)
+	}
+}
+
 // FanStatusReply's flushInput error branch had no coverage - close
 // the underlying fd first, same technique as
 // TestPort_FlushInput_ErrorOnClosedFd.

@@ -439,6 +439,28 @@ this color's bit, OR'd with the on-flag if turning on). No frame for
 error rather than guessing one (see `pkg/mcu/ex2.go`'s
 `EX2PowerLEDFrames`, `ErrEX2PowerLEDBlinkingUnconfirmed`).
 
+**Inter-frame pacing between the two frames is load-bearing, not
+cosmetic** - found the hard way (again): sending both back-to-back
+(this tool's first version) was intermittently unreliable on real
+hardware - switching color, or even a fresh "on" from "off", would
+sometimes need more than one attempt, and a failed attempt typically
+went dark rather than landing on either color (consistent with the
+*second* frame getting lost while the MCU was presumably still busy
+with the first - this protocol has no checksum or acknowledgement at
+all, so nothing but timing enforces this). A live strace of one
+successful real `led power red on` run showed the vendor itself
+pausing **~400ms** between the two frames (confirmed via its own
+timestamps: last byte of "clear" at `.396806`, first byte of "set" at
+`.797133`). A separate, unsuccessful attempt showed the vendor
+retrying the "clear" frame alone 7 times over ~2.7s before the
+process was killed - plausibly its own retry-on-failure logic for the
+same underlying unreliability, though that path wasn't captured
+through to a full successful sequence. `wd-control-tool` reproduces
+only the confirmed ~400ms pause (`pkg/mcu/ex2.go`'s
+`ex2PowerLEDInterFrameDelay`), not a retry loop - the one full
+capture available only shows a clean two-frame success with pacing,
+never a confirmed multi-attempt success to copy exactly.
+
 **EX4's power LED mechanism is now unconfirmed, not confirmed as this
 spec previously claimed** - that claim rested on the same
 never-hardware-tested decompile that was just shown wrong for EX2.
