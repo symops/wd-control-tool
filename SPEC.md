@@ -453,12 +453,14 @@ combinations of color x on/off:
 This decodes perfectly into: blue bit = `0x01`, red bit = `0x04`, "on"
 flag = `0x10`. Frame 1 always clears the *other* color (value = that
 color's bit alone, no on-flag - itself a genuine "turn that color
-off", mirroring the mutual-exclusion behavior HD-bay's GPIO scheme
-also has); frame 2 sets *this* color to the requested state (value =
-this color's bit, OR'd with the on-flag if turning on). No frame for
-"blinking" has been captured - `wd-control-tool` reports that as an
-error rather than guessing one (see `pkg/mcu/ex2.go`'s
-`EX2PowerLEDFrames`, `ErrEX2PowerLEDBlinkingUnconfirmed`).
+off"); frame 2 sets *this* color to the requested state (value = this
+color's bit, OR'd with the on-flag if turning on). Unlike Power,
+HD-bay's two colors turned out to have NO confirmed mutual exclusion
+(see "HD-bay" above - a stale version of this sentence used to claim
+otherwise, before that capture). No frame for "blinking" has been
+captured - `wd-control-tool` reports that as an error rather than
+guessing one (see `pkg/mcu/ex2.go`'s `EX2PowerLEDFrames`,
+`ErrEX2PowerLEDBlinkingUnconfirmed`).
 
 **Inter-frame pacing between the two frames is load-bearing, not
 cosmetic** - found the hard way (again): sending both back-to-back
