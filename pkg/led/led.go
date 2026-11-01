@@ -1,7 +1,22 @@
-// Package led implements EX2/EX4's LED control - confirmed to be
-// direct /dev/mem register pokes against a Marvell-style SoC GPIO
-// controller at physical base 0xF1000000, NOT the MCU/UART channel,
-// NOT sysfs, NOT I2C. See SPEC.md, "LED (EX2/EX4)".
+// Package led implements EX2/EX4's HD-bay LED control (hd0..hd3) and
+// EX4's power LED - direct /dev/mem register pokes against a
+// Marvell-style SoC GPIO controller at physical base 0xF1000000, NOT
+// the MCU/UART channel, NOT sysfs, NOT I2C. See SPEC.md, "LED
+// (EX2/EX4)".
+//
+// EX2's power LED is NOT handled here, despite Plan/Set accepting a
+// Power zone that would compute GPIO writes for it: a live hardware
+// capture showed EX2's real power LED is MCU-driven (see
+// pkg/mcu.EX2PowerLEDFrames), not GPIO - the CLI
+// (cmd/wd-control-tool's buildEX2PowerLEDAction) intercepts board
+// EX2 + zone Power before ever calling into this package. Plan/Set
+// still compute the (now known-wrong-for-EX2) GPIO writes for that
+// combination if called directly - this package has no board
+// parameter to reject it itself. EX4's power LED mechanism remains
+// unconfirmed on real hardware either way (the original "confirmed
+// identical to EX2" claim rested on the same untested decompile that
+// was wrong for EX2) and is left as GPIO pending an EX4-specific
+// capture.
 //
 // EX2U's LED (a single MCU-driven status LED, plus plain
 // kernel-LED-class hd0/hd1 bay LEDs that are out of scope for this

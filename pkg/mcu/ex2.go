@@ -1,5 +1,7 @@
 package mcu
 
+import "fmt"
+
 // EX2's legacy MCU, /dev/ttyS1, 115200 8N1 (note: different baud from
 // EX4's 19200 - confirmed, do not assume parity).
 //
@@ -16,6 +18,27 @@ var (
 	ex2DeviceReady  = legacyCmd{"DeviceReady", 0x03, 0x01, 0x00, 0x00, 0x00}
 	ex2ThermalGet   = legacyCmd{"ThermalGet", 0x03, 0x08, 0x00, 0x00, 0x00}
 	ex2FanStatusGet = legacyCmd{"FanStatusGet", 0x03, 0x09, 0x00, 0x00, 0x00}
+
+	// ex2NewPWRLed is EX2's chassis POWER LED command - NOT a
+	// /dev/mem GPIO poke the way pkg/led's "power" zone assumed (that
+	// assumption, from a static libshare.so decompile, was never
+	// hardware-confirmed and turned out to be wrong: a live strace of
+	// the real `led` tool on real EX2 hardware showed no /dev/mem
+	// open at all for `led power ...`, only /dev/ttyS1 + librs232.so
+	// - exactly this MCU command, previously listed as one of
+	// SPEC.md's "anomalous" unexplained table rows, b4=0x26). See
+	// EX2PowerLEDFrames for the confirmed value encoding.
+	ex2NewPWRLed = legacyCmd{"NewPWRLed", 0x26, 0x00, 0x00, 0x00, 0x01}
+)
+
+// NewPWRLed's value byte (table's B6 slot, replaced by buildValueFrame)
+// is a bitmask: one bit selects the color, a separate bit means "on".
+// Confirmed via a live strace capturing all 4 combinations of
+// color x on/off on real EX2 hardware - see EX2PowerLEDFrames.
+const (
+	ex2PWRLedBlueBit = 0x01
+	ex2PWRLedRedBit  = 0x04
+	ex2PWRLedOnFlag  = 0x10
 )
 
 // EX2 is a legacy-protocol client bound to EX2's command table.
@@ -50,3 +73,54 @@ func (m *EX2) DeviceReady() error { return sendLegacy(m.p, buildFixedFrame(ex2De
 // SPEC.md, "unresolved").
 func (m *EX2) RequestThermal() error   { return sendLegacy(m.p, buildFixedFrame(ex2ThermalGet)) }
 func (m *EX2) RequestFanStatus() error { return sendLegacy(m.p, buildFixedFrame(ex2FanStatusGet)) }
+
+// EX2PowerLEDFrames builds the two NewPWRLed frames the real `led`
+// tool sends for one `led power COLOR STATE` call: first clears the
+// OTHER color (value = otherColorBit, no on-flag - itself a genuine
+// "turn that color off"), then sets THIS color to the requested
+// state (value = colorBit, OR'd with the on-flag if turning on).
+//
+// Hardware-confirmed by a live strace of the real vendor `led` tool
+// on real EX2 hardware for all 4 combinations (red/blue x on/off),
+// run after the previously-documented /dev/mem GPIO scheme was found
+// to do nothing at all for this zone:
+//
+//	blue on:  FA 26 00 04 00 01 FB, FA 26 00 11 00 01 FB
+//	blue off: FA 26 00 04 00 01 FB, FA 26 00 01 00 01 FB
+//	red on:   FA 26 00 01 00 01 FB, FA 26 00 14 00 01 FB
+//	red off:  FA 26 00 01 00 01 FB, FA 26 00 04 00 01 FB
+//
+// Only on/off were captured - "blinking" has no confirmed frame (see
+// SPEC.md's "EX2/EX4 protocol", NewPWRLed, and this project's own
+// house rule against guessing one).
+func EX2PowerLEDFrames(color string, on bool) ([2][]byte, error) {
+	var colorBit, otherBit byte
+	switch color {
+	case "blue":
+		colorBit, otherBit = ex2PWRLedBlueBit, ex2PWRLedRedBit
+	case "red":
+		colorBit, otherBit = ex2PWRLedRedBit, ex2PWRLedBlueBit
+	default:
+		return [2][]byte{}, fmt.Errorf("mcu: unknown EX2 power LED color %q", color)
+	}
+	value := colorBit
+	if on {
+		value |= ex2PWRLedOnFlag
+	}
+	return [2][]byte{
+		buildValueFrame(ex2NewPWRLed, otherBit),
+		buildValueFrame(ex2NewPWRLed, value),
+	}, nil
+}
+
+// PowerLED sends EX2PowerLEDFrames's two frames in order.
+func (m *EX2) PowerLED(color string, on bool) error {
+	frames, err := EX2PowerLEDFrames(color, on)
+	if err != nil {
+		return err
+	}
+	if err := sendLegacy(m.p, frames[0]); err != nil {
+		return err
+	}
+	return sendLegacy(m.p, frames[1])
+}

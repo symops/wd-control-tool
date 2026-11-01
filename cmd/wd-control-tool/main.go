@@ -527,6 +527,14 @@ func buildLEDAction(b board.Board, serialPath string, args []string) (*action, i
 	if err == nil && (zone == led.HD2 || zone == led.HD3) && b == board.EX2 {
 		err = fmt.Errorf("EX2 only has hd0/hd1, not %q", args[0])
 	}
+
+	// EX2's power LED is a special case: unlike every other LED zone
+	// on EX2/EX4 (direct /dev/mem GPIO pokes - see pkg/led), it turned
+	// out to be MCU-driven - see buildEX2PowerLEDAction.
+	if err == nil && b == board.EX2 && zone == led.Power {
+		return buildEX2PowerLEDAction(serialPath, args[1], args[2])
+	}
+
 	color, cerr := parseColor(args[1])
 	stateVal, serr := parseState(args[2])
 	if err == nil {
@@ -552,6 +560,65 @@ func buildLEDAction(b board.Board, serialPath string, args []string) (*action, i
 			}
 			defer m.Close()
 			return m.ApplyAll(ws)
+		},
+	}, exitOK
+}
+
+// ex2LegacyBaud is EX2's legacy-MCU UART rate - 115200, NOT EX4's
+// 19200 (confirmed, see SPEC.md's "UART line settings" - do not
+// assume parity between boards).
+const ex2LegacyBaud = 115200
+
+// buildEX2PowerLEDAction handles EX2's power LED: a live strace of
+// the real vendor `led` tool on real EX2 hardware showed it opens no
+// /dev/mem at all for `led power ...` - only /dev/ttyS1, via the
+// legacy MCU's NewPWRLed command. See mcu.EX2PowerLEDFrames for the
+// confirmed byte encoding and SPEC.md's "EX2/EX4 protocol".
+func buildEX2PowerLEDAction(serialPath, colorArg, stateArg string) (*action, int) {
+	color, cerr := parseColor(colorArg)
+	stateVal, serr := parseState(stateArg)
+	err := cerr
+	if err == nil {
+		err = serr
+	}
+	// Only on/off were captured on real hardware - blinking has no
+	// confirmed MCU frame (see mcu.ErrEX2PowerLEDBlinkingUnconfirmed),
+	// reported as a plan error rather than guessed or silently
+	// dropped.
+	if err == nil && stateVal == led.Blinking {
+		err = mcu.ErrEX2PowerLEDBlinkingUnconfirmed
+	}
+
+	var frames [2][]byte
+	if err == nil {
+		frames, err = mcu.EX2PowerLEDFrames(color.String(), stateVal == led.On)
+	}
+
+	otherColor := "red"
+	if color == led.Red {
+		otherColor = "blue"
+	}
+
+	var debugLines []string
+	if err == nil {
+		debugLines = []string{
+			fmt.Sprintf("serial=%s baud=%d", serialPath, ex2LegacyBaud),
+			fmt.Sprintf("frame1 (clear %s)=% X", otherColor, frames[0]),
+			fmt.Sprintf("frame2 (%s %s)=% X", colorArg, stateArg, frames[1]),
+		}
+	}
+
+	return &action{
+		describe:   fmt.Sprintf("send led power %s %s to EX2 MCU (%s)", colorArg, stateArg, serialPath),
+		debugLines: debugLines,
+		planErr:    err,
+		apply: func() error {
+			p, operr := mcu.Open(serialPath, ex2LegacyBaud)
+			if operr != nil {
+				return operr
+			}
+			defer p.Close()
+			return mcu.NewEX2(p).PowerLED(color.String(), stateVal == led.On)
 		},
 	}, exitOK
 }

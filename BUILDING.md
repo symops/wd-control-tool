@@ -249,6 +249,31 @@ regression-tested by reading the configured termios back with
 baud (`pkg/mcu/open_test.go`'s `TestOpen_SetsRealBaudRateInCflag`,
 confirmed to fail against the pre-fix code before being committed).
 
+A second, unrelated real-hardware gap found the same way, on EX2
+this time: `led power blue off` (and every other `led power ...`
+case) had no physical effect at all, even though the register writes
+this tool computed exactly matched SPEC.md's documented `/dev/mem`
+GPIO scheme. A live strace of the real vendor `led` tool showed why:
+it opens **no `/dev/mem` at all** for the power LED - only
+`/dev/ttyS1`, via the legacy MCU protocol's `NewPWRLed` command
+(previously one of SPEC.md's own "anomalous, unexplained" table
+rows). The documented GPIO mechanism had never actually been
+hardware-confirmed for the power LED specifically - only statically,
+via the same decompile that turned out to be right for HD-bay (a
+second strace, of `led hd0/hd1 ... on/off`, DID show 4 `/dev/mem`
+opens per command, confirming that half of the old claim) but wrong
+for power. Fixed by adding `mcu.EX2PowerLEDFrames`/`(*EX2).PowerLED`
+(the exact byte encoding decoded from 4 captured real-hardware
+frames - blue/red x on/off) and routing EX2's `-l power ...` through
+it instead of `pkg/led`/`pkg/regio` (`cmd/wd-control-tool/main.go`'s
+`buildEX2PowerLEDAction`); EX2's hd0/hd1 and EX4's power LED are
+untouched, the latter because no EX4 hardware was available to
+re-verify it and changing it without evidence would just be a guess
+in the other direction. See `pkg/mcu/ex2_test.go`'s
+`TestEX2PowerLEDFrames` (golden-byte, from the real capture) and
+`cmd/wd-control-tool/main_test.go`'s
+`TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase`.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

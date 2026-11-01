@@ -311,16 +311,26 @@ implemented.
 
 ## LED (EX2/EX4)
 
+Two genuinely different mechanisms, not one - found out the hard way
+on real EX2 hardware (see below).
+
+### HD-bay (hd0..hd3) - `/dev/mem` GPIO, confirmed on real hardware
+
 **Direct `/dev/mem` register pokes against a Marvell-style SoC GPIO
 controller, physical base `0xF1000000` - no MCU/UART, no ioctl, no
-I2C, no sysfs.** Confirmed via `libshare.so`'s `LIB_Write_CPU_Register`/
-`LIB_Write_Mem`, which does the textbook `/dev/mem` pattern: `open64
-("/dev/mem", O_RDWR|O_SYNC)`, `mmap64` the containing page, poke the
-32-bit word, `munmap`/`close`.
+I2C, no sysfs.** Originally only statically decoded (via
+`libshare.so`'s `LIB_Write_CPU_Register`/`LIB_Write_Mem`, the
+textbook `/dev/mem` pattern: `open64("/dev/mem", O_RDWR|O_SYNC)`,
+`mmap64` the containing page, poke the 32-bit word, `munmap`/
+`close`); now **confirmed on real EX2 hardware** too - a live strace
+of the real `led` tool for `led hd0/hd1 blue/red on/off` shows exactly
+4 `openat(.../dev/mem...)` calls per command (read+write, clear+set -
+see "on"/"off" below), matching this mechanism. The exact register
+addresses/bits below are still only statically decoded, not directly
+read back on real hardware.
 
 | LED | Data-Out | Blink-Enable | Red bit | Blue bit |
 |---|---|---|---|---|
-| Power | `0xF1010100` | `0xF1010108` | 28 | 29 |
 | HD-bay (bay N, N=0..3) | `0xF1010140` | `0xF1010148` | bit `13+N` | **unconfirmed, see below** |
 
 - `on`: clear the other color's bit in both registers (the two colors
@@ -332,10 +342,6 @@ I2C, no sysfs.** Confirmed via `libshare.so`'s `LIB_Write_CPU_Register`/
   blinking is a genuine hardware feature of the SoC's GPIO controller
   (confirmed by EX2's own `led --help` text: "blue blinking(controlled
   by hw)"), not a software timer loop.
-
-Confirmed identical mechanism on EX2 and EX4 (same `0xF1000000` base,
-same wrapper functions in `libshare.so`); only the HD-bay count
-differs (EX2: bay0/bay1 only; EX4: bay0-bay3).
 
 `libalpha_common.so` (also linked by `led`) exports **no**
 hardware-access functions at all - its entire ~99-function export
@@ -352,6 +358,48 @@ helper used for something else at that call site. **Not confirmed on
 real hardware.** wd-control-tool implements HD-bay blue with the same
 GPIO bit scheme as a best-effort pending that confirmation - treat it
 as unverified.
+
+### Power LED - MCU (`NewPWRLed`), confirmed on real EX2 hardware - NOT `/dev/mem`
+
+**Corrected** after a real-hardware failure report: this spec
+previously claimed the power LED used the *same* `/dev/mem` GPIO
+mechanism as HD-bay ("confirmed identical... same wrapper functions
+in `libshare.so`") - that claim was never actually hardware-confirmed
+for the power LED specifically, and turned out to be wrong. A live
+strace of the real `led power blue on` on real EX2 hardware opens
+**no `/dev/mem` at all** - only `/dev/ttyS1` (via `librs232.so`),
+i.e. the legacy MCU protocol (see "EX2/EX4 protocol" above), using
+the command this spec previously listed as one of its anomalous,
+unexplained table rows: **`NewPWRLed`** (`b4=0x26`, dispatch group
+24/`buildValueFrame` shape: `FA 26 00 <value> 00 01 FB`).
+
+`<value>` is a bitmask, confirmed via a live strace capturing all 4
+combinations of color x on/off:
+
+| Command | Frame 1 (clear other color) | Frame 2 (set this color) |
+|---|---|---|
+| `led power blue on` | `FA 26 00 04 00 01 FB` | `FA 26 00 11 00 01 FB` |
+| `led power blue off` | `FA 26 00 04 00 01 FB` | `FA 26 00 01 00 01 FB` |
+| `led power red on` | `FA 26 00 01 00 01 FB` | `FA 26 00 14 00 01 FB` |
+| `led power red off` | `FA 26 00 01 00 01 FB` | `FA 26 00 04 00 01 FB` |
+
+This decodes perfectly into: blue bit = `0x01`, red bit = `0x04`, "on"
+flag = `0x10`. Frame 1 always clears the *other* color (value = that
+color's bit alone, no on-flag - itself a genuine "turn that color
+off", mirroring the mutual-exclusion behavior HD-bay's GPIO scheme
+also has); frame 2 sets *this* color to the requested state (value =
+this color's bit, OR'd with the on-flag if turning on). No frame for
+"blinking" has been captured - `wd-control-tool` reports that as an
+error rather than guessing one (see `pkg/mcu/ex2.go`'s
+`EX2PowerLEDFrames`, `ErrEX2PowerLEDBlinkingUnconfirmed`).
+
+**EX4's power LED mechanism is now unconfirmed, not confirmed as this
+spec previously claimed** - that claim rested on the same
+never-hardware-tested decompile that was just shown wrong for EX2.
+No EX4 hardware has been available to re-test this, so
+`wd-control-tool` still uses the `/dev/mem` GPIO path for EX4's power
+LED pending an EX4-specific capture - changing it without evidence
+would just be guessing in the other direction.
 
 ## RTC (EX2/EX4)
 
@@ -405,10 +453,12 @@ display at all.
 4. **EX2's fan level-to-bitmask order** - the 6 bitmasks are confirmed
    to exist; which exact level (1-6) maps to which was inferred from
    disassembly order, not independently verified per level.
-5. Three anomalous command-table rows that don't fit the normal
-   category-byte scheme: EX2's `NewPWRLed` (b4=`0x26`) and `pwmspeed`
-   (b4=`0x27`), EX4's `ErrStatus` (b4=`0x55`). Not investigated (not
-   needed for this tool's current feature set).
+5. Two anomalous command-table rows that don't fit the normal
+   category-byte scheme: EX2's `pwmspeed` (b4=`0x27`), EX4's
+   `ErrStatus` (b4=`0x55`). Not investigated (not needed for this
+   tool's current feature set). (EX2's third anomalous row,
+   `NewPWRLed`, b4=`0x26`, is no longer unresolved - see "LED
+   (EX2/EX4)", "Power LED".)
 6. EX2U's `sys_reboot` byte sequence was never captured (see EX2U
    protocol table) - do not guess it if ever needed.
 

@@ -1798,6 +1798,83 @@ func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) 
 // NewEX2U's methods directly (bypassing the CLI layer entirely). A
 // real `-l STATE` on EX2U, run through the actual CLI, had never
 // once been exercised end to end.
+// EX2's power LED is MCU-driven (NewPWRLed), not a /dev/mem GPIO
+// poke like every other LED zone - see buildEX2PowerLEDAction. These
+// 4 cases are the exact bytes captured on real EX2 hardware via a
+// live strace of the vendor `led` tool (see
+// mcu.EX2PowerLEDFrames's doc comment).
+func TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase(t *testing.T) {
+	cases := []struct {
+		color, state string
+		want         [2][]byte
+	}{
+		{"blue", "on", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x11, 0x00, 0x01, 0xFB},
+		}},
+		{"blue", "off", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
+		}},
+		{"red", "on", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x14, 0x00, 0x01, 0xFB},
+		}},
+		{"red", "off", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+		}},
+	}
+	for _, c := range cases {
+		fake := fakemcu.New(t)
+		code, _, errOut := captureRun(t, []string{"-b", "ex2", "--serial", fake.SlavePath, "-l", "power", c.color, c.state})
+		if code != exitOK {
+			t.Fatalf("%s %s: code=%d err=%q", c.color, c.state, code, errOut)
+		}
+		got := fake.ReadFrame(t, 14, 2*time.Second)
+		want := append(append([]byte{}, c.want[0]...), c.want[1]...)
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s %s: wire bytes = % X, want % X", c.color, c.state, got, want)
+		}
+	}
+}
+
+// EX2 power LED blinking has no confirmed MCU frame - must be a
+// clear, reported error (both as a real-run usage error and as a
+// dry-run "would fail"), never silently guessed or dropped.
+func TestRun_EX2PowerLedBlinking_Unconfirmed(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-b", "ex2", "-l", "power", "blue", "blinking"})
+	if code != exitUsage {
+		t.Errorf("real run: code=%d, want %d; err=%q", code, exitUsage, errOut)
+	}
+	if !strings.Contains(errOut, "blinking") || !strings.Contains(errOut, "no confirmed") {
+		t.Errorf("errOut=%q, want it to mention blinking being unconfirmed", errOut)
+	}
+
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-l", "power", "blue", "blinking"})
+	if code != exitOK {
+		t.Errorf("dry run: code=%d, want %d (dry-run always exits 0)", code, exitOK)
+	}
+	if !strings.Contains(out, "would fail") {
+		t.Errorf("dry run out=%q, want a \"would fail\" line", out)
+	}
+}
+
+// EX2's OTHER LED zones (hd0/hd1) are untouched by the power-LED
+// special case - still the /dev/mem GPIO path.
+func TestRun_DryRun_EX2HDBayLed_StillUsesRegio(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-D", "-l", "hd0", "blue", "on"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "/dev/mem") {
+		t.Errorf("out=%q, want hd0 to still describe a /dev/mem write", out)
+	}
+	if strings.Contains(out, "MCU") {
+		t.Errorf("out=%q, hd0 must not be routed through the MCU", out)
+	}
+}
+
 func TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState(t *testing.T) {
 	cases := []struct {
 		state string
