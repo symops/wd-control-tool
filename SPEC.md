@@ -335,8 +335,10 @@ else.
 
 ### Fan status read-back (EX2 `FanStatusGet` reply - CONFIRMED)
 
-Unlike every other MCU reply in this spec (see "Unresolved" below),
-EX2's `FanStatusGet` reply is now decoded: a live strace of the real
+Unlike most MCU replies in this spec (see "Unresolved" below for the
+ones that remain undecoded) - alongside EX2U's `tmp_get` reply above,
+the other confirmed exception - EX2's `FanStatusGet` reply is now
+decoded: a live strace of the real
 `fan_control -g 4` printed `fan rpm = 5172` while the captured reply
 was `FA 03 09 00 00 3A FB` (`0x3A` = 58 decimal). Byte 5 is a
 tachometer **period**, not RPM directly: `300000/58 = 5172.41`,
