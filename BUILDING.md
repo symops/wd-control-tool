@@ -187,6 +187,18 @@ isolation:
   failed every single run against the old code. Fixed by holding the
   lock across both the read and the write.
 
+A related test-quality bug, not a product bug: `regio.Mem`'s own
+`TestMem_ConcurrentAccessIsRaceFree` claimed (in its doc comment) to
+call `Close()` concurrently with the other 50 goroutines, but the
+code actually called it strictly after `wg.Wait()` - with nothing
+left running, `Close()` never raced against anything, so this test
+could never have caught a regression in `Close()`'s own locking at
+all. Fixed by launching `Close()` as its own goroutine started
+alongside the others instead of afterward; added the same genuinely-
+concurrent pattern for `mcu.Port.Close()`
+(`TestPort_Close_ConcurrentWithSendBytesIsRaceFree`), which had no
+such test before at all.
+
 No automated test opens a real `/dev/mem` (only the sparse-file
 stand-in) or sends traffic over a real UART to actual hardware - by
 design, this suite proves the tool's own logic (frame bytes, register
