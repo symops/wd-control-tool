@@ -139,6 +139,25 @@ func TestPort_Close_ConcurrentWithSendBytesIsRaceFree(t *testing.T) {
 }
 
 // flushInput's error branch (the TCFLSH ioctl failing) had no
+// recvBytes' own "genuine read error" branch (as opposed to a plain
+// timeout, already covered elsewhere) had no coverage - Read on an
+// already-closed *os.File fails immediately with a real, non-EOF
+// error, giving a deterministic way to trigger it without needing a
+// pty-level fault.
+func TestPort_RecvBytes_ReadErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+	fake.Slave.Close()
+
+	_, err := p.recvBytes(make([]byte, 16), time.Second)
+	if err == nil {
+		t.Fatal("recvBytes on a closed fd: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "mcu: read:") {
+		t.Errorf("recvBytes error = %q, want it wrapped with \"mcu: read:\" context", err.Error())
+	}
+}
+
 // coverage - same technique as TestPort_SendBytes_WriteErrorPropagates:
 // close the underlying fd out from under the Port first.
 func TestPort_FlushInput_ErrorOnClosedFd(t *testing.T) {

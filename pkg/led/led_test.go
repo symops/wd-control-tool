@@ -240,6 +240,16 @@ func TestPlan_RejectsBadInput(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "99") {
 		t.Errorf("error = %q, want it to mention the value 99", err)
 	}
+	// Power's own invalid-state branch is separate code from HD-bay's
+	// (found missing via go tool cover: the HD-bay case above never
+	// exercised it) - Plan builds Power's otherBit-clearing writes
+	// before reaching the state switch, so this also confirms that
+	// doesn't mask the error.
+	if _, err := Plan(Power, Red, State(99)); err == nil {
+		t.Error("Plan(Power, Red, invalid state): want error, got nil")
+	} else if !strings.Contains(err.Error(), "99") {
+		t.Errorf("error = %q, want it to mention the value 99", err)
+	}
 	if _, err := Plan(Zone(99), Red, On); err == nil {
 		t.Error("Plan with invalid zone: want error, got nil")
 	} else if !strings.Contains(err.Error(), "99") {

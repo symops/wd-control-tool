@@ -233,6 +233,26 @@ func TestEX2_PowerLED_PausesBetweenFrames(t *testing.T) {
 	}
 }
 
+// PowerLED's own error branches had no coverage: EX2PowerLEDFrames
+// failing (bad color) and sendLegacy failing on the first frame.
+func TestEX2_PowerLED_RejectsUnknownColor(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+	if err := m.PowerLED("green", true); err == nil {
+		t.Error(`PowerLED("green", true): want error, got nil`)
+	}
+}
+
+func TestEX2_PowerLED_FirstFrameWriteErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+	fake.Slave.Close()
+
+	if err := m.PowerLED("blue", true); err == nil {
+		t.Error("PowerLED on a closed fd: want error, got nil")
+	}
+}
+
 // FanStatusReply's flushInput error branch had no coverage - close
 // the underlying fd first, same technique as
 // TestPort_FlushInput_ErrorOnClosedFd.
