@@ -335,8 +335,8 @@ chained in one command, run in the order given:
   -d, --display TEXT   ex4 only
 
 led's own arguments:
-  ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking
-  ex2u:      STATE              states: on,off,blinking,breathing
+  ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking(blink)
+  ex2u:      STATE              states: on,off,blinking(blink),breathing(breathe)
 
 Modifiers (may appear anywhere, apply to every action in the command):
   -n, --dry-run   print what would be done, touch no hardware; exits 0 even if the real run would fail
