@@ -2,6 +2,7 @@ package led
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/symops/wd-control-tool/test/fakeregio"
@@ -337,4 +338,36 @@ func FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Exercises regio.Mem.SetClearBits' atomicity fix (see that package's
+// own TestMem_SetClearBits_ConcurrentDistinctBitsAllSurvive) through
+// the actual led.Set API, not just raw regio calls - confirming the
+// fix's benefit is real at the level callers (this project's own
+// CLI, or any future caller sharing one Mem across goroutines) would
+// actually see it. Each HD-bay zone's Set only ever touches its own
+// bit (see hdBayBit: no "other color" bit to clear for non-Power
+// zones), so N goroutines each setting ONE distinct bay on led via
+// Set concurrently must all survive, with no lost update.
+func TestSet_ConcurrentDistinctHDBaysAllSurvive(t *testing.T) {
+	mem := fakeregio.New(t)
+	zones := []Zone{HD0, HD1, HD2, HD3}
+
+	var wg sync.WaitGroup
+	wg.Add(len(zones))
+	for _, z := range zones {
+		go func(z Zone) {
+			defer wg.Done()
+			if err := Set(mem, z, Red, On); err != nil {
+				t.Errorf("Set(%v, Red, On): %v", z, err)
+			}
+		}(z)
+	}
+	wg.Wait()
+
+	want := uint32(1<<13 | 1<<14 | 1<<15 | 1<<16) // HD0..HD3's own bits
+	got := mustRead(t, mem, hdBayDataOut)
+	if got != want {
+		t.Errorf("after 4 concurrent Set calls (one per HD bay): DataOut = 0x%x, want 0x%x (missing bits: 0x%x)", got, want, want&^got)
+	}
 }
