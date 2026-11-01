@@ -1074,6 +1074,95 @@ func TestRun_RealRun_EX2FanRPM_DebugPrintsRawReplyBytes(t *testing.T) {
 	}
 }
 
+// Mirrors TestRun_RealRun_EX2UTemp_NoReplyPrintsNoReplyMessage for the
+// fan RPM command: found via go tool cover - buildEX2FanRPMAction's
+// len(reply)==0 branch (no reply arrived within ex2FanRPMReplyTimeout)
+// had no coverage at all at this layer, only at pkg/mcu's own.
+func TestRun_RealRun_EX2FanRPM_NoReplyPrintsNoReplyMessage(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildAction(board.EX2, "fan", fake.SlavePath, []string{"rpm"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the request, send nothing back
+
+	if err := <-applyDone; err != nil { // blocks ~ex2FanRPMReplyTimeout
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "no reply") {
+		t.Errorf("stdout=%q, want a \"no reply\" message", out)
+	}
+}
+
+// Mirrors mcu.TestEX2DecodeFanRPM_RealCapturedHeadlessTailIsUnrecoverable
+// at the CLI layer: found via go tool cover - buildEX2FanRPMAction's
+// derr!=nil branch (a reply arrives, but EX2DecodeFanRPM can't find a
+// complete matching frame in it) had no coverage here either, only at
+// pkg/mcu's own. Confirms the CLI prints its generic message (not
+// derr's own text, which embeds the raw bytes - see buildAction's
+// doc comment on why) and still returns a nil error.
+func TestRun_RealRun_EX2FanRPM_DecodeFailurePrintsGenericMessage(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildAction(board.EX2, "fan", fake.SlavePath, []string{"rpm"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the FanStatusGet request
+	// Same genuinely-unrecoverable headless tail as
+	// mcu.TestEX2DecodeFanRPM_RealCapturedHeadlessTailIsUnrecoverable:
+	// a previous invocation's leftover tail, missing its own head.
+	unrecoverable := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+	if _, err := fake.Master.Write(unrecoverable); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "couldn't decode an RPM value") {
+		t.Errorf("stdout=%q, want the generic decode-failure message", out)
+	}
+	if strings.Contains(out, "30 00 00 00 00 FB") {
+		t.Errorf("stdout=%q, raw reply bytes must not be printed without -D", out)
+	}
+}
+
 // Mirrors TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes but for the
 // outcome every real capture of this command has actually shown so
 // far: nothing comes back. Confirms apply() reports that plainly
