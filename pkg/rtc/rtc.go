@@ -4,15 +4,22 @@
 // all and is out of scope here.
 //
 // IMPORTANT, READ BEFORE EXTENDING: this package can only WRITE the
-// RTC, not read it back. The vendor's RTC *read* path (and the
-// temperature/fan-status reads in pkg/fan) depends on parsing the
-// MCU's reply frames over UART, which this project has not decoded -
-// the vendor's own up_read_daemon/xmldbc machinery that did this was
-// never reverse-engineered past "it exists and publishes named
-// results somewhere" (see SPEC.md, "unresolved"). That also means
-// there is no ack confirmation that the MCU actually received a
-// write - Set() is fire-and-forget, same risk profile as sending a
-// command the vendor tools would normally retry/verify.
+// RTC, not read it back. The vendor's RTC *read* path depends on
+// parsing the MCU's reply frame for RDateAndTime specifically, which
+// this project has not decoded - the vendor's own up_read_daemon/
+// xmldbc machinery that did this was never reverse-engineered past
+// "it exists and publishes named results somewhere" (see SPEC.md,
+// "unresolved"). That also means there is no ack confirmation that
+// the MCU actually received a write - Set() is fire-and-forget, same
+// risk profile as sending a command the vendor tools would normally
+// retry/verify.
+//
+// (This is no longer true of every MCU reply in this project: EX2U's
+// temperature reply and EX2's fan RPM reply - pkg/mcu's
+// EX2UDecodeTempFahrenheit/EX2DecodeFanRPM - were each decoded later
+// via a live capture, proving the general approach works. RTC's own
+// reply, and EX2/EX4's other sensor reads, haven't had that capture
+// done yet - each reply shape has to be confirmed on its own.)
 //
 // The real `rtc -s` (RTC -> SYS, the direction actually used at boot
 // in both EX2 and EX4's vendor /init) is NOT reproducible yet for
