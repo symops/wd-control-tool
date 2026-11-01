@@ -65,123 +65,117 @@ func TestSet_PowerLED(t *testing.T) {
 	}
 }
 
-// Unlike the power LED's two colors, HD-bay zones have no known
-// "other bit" to clear (see hdBayBit's doc comment) - turning one bay
-// on must NOT affect a different bay's bit.
-func TestSet_HDBayLED_ZonesAreIndependent(t *testing.T) {
+// HD-bay zones have no known "other color" bit to clear (unlike
+// Power - see hdBayBits' doc comment: red/blue use entirely
+// different, non-overlapping bits, and no mutual exclusion has ever
+// been observed on real hardware) - turning one bay/color on must
+// NOT affect a different bay or the other color.
+func TestSet_HDBayLED_ZonesAndColorsAreIndependent(t *testing.T) {
 	mem := fakeregio.New(t)
 
 	if err := Set(mem, HD0, Red, On); err != nil {
 		t.Fatalf("Set HD0 red on: %v", err)
 	}
-	if err := Set(mem, HD2, Red, Blinking); err != nil {
-		t.Fatalf("Set HD2 red blinking: %v", err)
+	if err := Set(mem, HD1, Blue, On); err != nil {
+		t.Fatalf("Set HD1 blue on: %v", err)
 	}
 
-	got := mustRead(t, mem, hdBayDataOut)
-	wantBits := uint32(1<<13 | 1<<15) // HD0's on-bit + HD2's on-bit (blinking also sets DataOut)
-	if got != wantBits {
-		t.Errorf("DataOut = 0x%x, want 0x%x (HD0 and HD2 both set, HD1/HD3 untouched)", got, wantBits)
+	want := uint32(1<<21 | 1<<23) // HD0 red + HD1 blue
+	got := mustRead(t, mem, hdBayReg1)
+	if got != want {
+		t.Errorf("hdBayReg1 = 0x%x, want 0x%x (HD0 red and HD1 blue both set, nothing else)", got, want)
+	}
+	got2 := mustRead(t, mem, hdBayReg2)
+	if got2 != want {
+		t.Errorf("hdBayReg2 = 0x%x, want 0x%x (both registers always mirror each other)", got2, want)
 	}
 
-	gotBlink := mustRead(t, mem, hdBayBlinkEn)
-	if gotBlink != 1<<15 {
-		t.Errorf("BlinkEn = 0x%x, want 0x%x (only HD2 blinking)", gotBlink, uint32(1<<15))
-	}
-
-	// Turning HD0 off must not touch HD2's bits.
+	// Turning HD0 red off must not touch HD1's blue bit.
 	if err := Set(mem, HD0, Red, Off); err != nil {
 		t.Fatalf("Set HD0 red off: %v", err)
 	}
-	got = mustRead(t, mem, hdBayDataOut)
-	if got != 1<<15 {
-		t.Errorf("after HD0 off: DataOut = 0x%x, want 0x%x (only HD2 left set)", got, uint32(1<<15))
+	got = mustRead(t, mem, hdBayReg1)
+	if got != 1<<23 {
+		t.Errorf("after HD0 red off: hdBayReg1 = 0x%x, want 0x%x (only HD1 blue left set)", got, uint32(1<<23))
 	}
 }
 
-// HD-bay zones currently honor only ONE color's bit (see hdBayBit's
-// doc comment: the blue/activity channel's real register is
-// unconfirmed, so this intentionally reuses the confirmed bit for
-// both colors as a best-effort pending that confirmation). Pin this
-// explicitly so a future change can't silently start honoring color
-// there (which would be a real behavior change, deserving its own
-// deliberate commit) without a test failing to call it out, and so a
-// future SPEC.md confirmation of the real blue bit has an obvious
-// test to go update.
-func TestPlan_HDBayColorIsCurrentlyIgnored(t *testing.T) {
-	for _, zone := range []Zone{HD0, HD1, HD2, HD3} {
-		for _, state := range []State{On, Off, Blinking} {
-			red, err := Plan(zone, Red, state)
-			if err != nil {
-				t.Fatalf("Plan(%v, Red, %v): %v", zone, state, err)
+// Confirmed on real EX2 hardware: hdBayReg1 and hdBayReg2 ALWAYS
+// change by the identical bit together - this is not a Data-Out/
+// Blink-Enable split the way Power's two registers are. See
+// hdBayReg1's own doc comment for the register-page capture this
+// came from.
+func TestSet_HDBayLED(t *testing.T) {
+	mem := fakeregio.New(t)
+
+	cases := []struct {
+		zone  Zone
+		color Color
+		bit   uint32
+	}{
+		{HD0, Red, 1 << 21},
+		{HD0, Blue, 1 << 25},
+		{HD1, Red, 1 << 20},
+		{HD1, Blue, 1 << 23},
+	}
+	for _, c := range cases {
+		if err := Set(mem, c.zone, c.color, On); err != nil {
+			t.Fatalf("Set %v %v on: %v", c.zone, c.color, err)
+		}
+		if got := mustRead(t, mem, hdBayReg1); got&c.bit == 0 {
+			t.Errorf("%v %v on: hdBayReg1 = 0x%x, want bit 0x%x set", c.zone, c.color, got, c.bit)
+		}
+		if got := mustRead(t, mem, hdBayReg2); got&c.bit == 0 {
+			t.Errorf("%v %v on: hdBayReg2 = 0x%x, want bit 0x%x set", c.zone, c.color, got, c.bit)
+		}
+
+		if err := Set(mem, c.zone, c.color, Off); err != nil {
+			t.Fatalf("Set %v %v off: %v", c.zone, c.color, err)
+		}
+		if got := mustRead(t, mem, hdBayReg1); got&c.bit != 0 {
+			t.Errorf("%v %v off: hdBayReg1 = 0x%x, want bit 0x%x clear", c.zone, c.color, got, c.bit)
+		}
+		if got := mustRead(t, mem, hdBayReg2); got&c.bit != 0 {
+			t.Errorf("%v %v off: hdBayReg2 = 0x%x, want bit 0x%x clear", c.zone, c.color, got, c.bit)
+		}
+	}
+}
+
+// No real capture has ever shown a "blinking" transition on HD-bay -
+// reported as an error rather than guessed (see Plan's doc comment).
+func TestPlan_HDBayBlinkingUnconfirmed(t *testing.T) {
+	for _, zone := range []Zone{HD0, HD1} {
+		for _, color := range []Color{Red, Blue} {
+			if _, err := Plan(zone, color, Blinking); err == nil {
+				t.Errorf("Plan(%v, %v, Blinking): want error, got nil", zone, color)
 			}
-			blue, err := Plan(zone, Blue, state)
-			if err != nil {
-				t.Fatalf("Plan(%v, Blue, %v): %v", zone, state, err)
-			}
-			if len(red) != len(blue) {
-				t.Fatalf("Plan(%v, Red, %v) = %d writes, Plan(%v, Blue, %v) = %d writes - want equal counts", zone, state, len(red), zone, state, len(blue))
-			}
-			for i := range red {
-				if red[i] != blue[i] {
-					t.Errorf("Plan(%v, Red, %v)[%d] = %+v, Plan(%v, Blue, %v)[%d] = %+v - want identical (color currently ignored for HD bays)", zone, state, i, red[i], zone, state, i, blue[i])
+		}
+	}
+}
+
+// HD2/HD3 are EX4-only (EX2 only has hd0/hd1) and have no confirmed
+// register bit - the old "1<<(13+idx)" formula this replaced was
+// proven wrong for hd0/hd1, so it's not trusted for hd2/hd3 either.
+// Must fail loudly, not silently poke a guessed address.
+func TestPlan_HD2HD3Unconfirmed(t *testing.T) {
+	for _, zone := range []Zone{HD2, HD3} {
+		for _, color := range []Color{Red, Blue} {
+			for _, state := range []State{On, Off} {
+				if _, err := Plan(zone, color, state); err == nil {
+					t.Errorf("Plan(%v, %v, %v): want error, got nil", zone, color, state)
 				}
 			}
 		}
 	}
 }
 
-func TestSet_HDBayLED(t *testing.T) {
-	mem := fakeregio.New(t)
-
-	cases := []struct {
-		zone Zone
-		bit  uint32
-	}{
-		{HD0, 1 << 13},
-		{HD1, 1 << 14},
-		{HD2, 1 << 15},
-		{HD3, 1 << 16},
-	}
-	for _, c := range cases {
-		if err := Set(mem, c.zone, Red, On); err != nil {
-			t.Fatalf("Set %v red on: %v", c.zone, err)
-		}
-		if got := mustRead(t, mem, hdBayDataOut); got&c.bit == 0 {
-			t.Errorf("%v on: DataOut = 0x%x, want bit 0x%x set", c.zone, got, c.bit)
-		}
-		if got := mustRead(t, mem, hdBayBlinkEn); got&c.bit != 0 {
-			t.Errorf("%v on: BlinkEn = 0x%x, want bit 0x%x clear", c.zone, got, c.bit)
-		}
-
-		if err := Set(mem, c.zone, Red, Blinking); err != nil {
-			t.Fatalf("Set %v red blinking: %v", c.zone, err)
-		}
-		if got := mustRead(t, mem, hdBayBlinkEn); got&c.bit == 0 {
-			t.Errorf("%v blinking: BlinkEn = 0x%x, want bit 0x%x set", c.zone, got, c.bit)
-		}
-
-		if err := Set(mem, c.zone, Red, Off); err != nil {
-			t.Fatalf("Set %v red off: %v", c.zone, err)
-		}
-		if got := mustRead(t, mem, hdBayDataOut); got&c.bit != 0 {
-			t.Errorf("%v off: DataOut = 0x%x, want bit 0x%x clear", c.zone, got, c.bit)
-		}
-		if got := mustRead(t, mem, hdBayBlinkEn); got&c.bit != 0 {
-			t.Errorf("%v off: BlinkEn = 0x%x, want bit 0x%x clear", c.zone, got, c.bit)
-		}
-	}
-}
-
 func TestSet_InvalidZoneOnEX2(t *testing.T) {
 	mem := fakeregio.New(t)
-	// HD2/HD3 don't physically exist on EX2 - the CLI layer rejects
-	// them before calling Set (see cmd/wd-control-tool/main.go), but
-	// Set itself doesn't know which board it's on, so this just
-	// documents that Set alone will happily poke HD2/HD3's bits; the
-	// board-aware rejection lives at the CLI layer, not here.
-	if err := Set(mem, HD3, Red, On); err != nil {
-		t.Fatalf("Set(HD3, ...) unexpectedly failed: %v", err)
+	// HD2/HD3 don't physically exist on EX2 and (now) have no
+	// confirmed register bit either - Set must report that error,
+	// not silently poke a guessed address.
+	if err := Set(mem, HD3, Red, On); err == nil {
+		t.Fatal("Set(HD3, ...): want error (unconfirmed), got nil")
 	}
 }
 
@@ -202,7 +196,7 @@ func TestPlan_MatchesSetBehavior(t *testing.T) {
 		{Power, Red, On},
 		{Power, Red, Off},
 		{HD0, Red, On},
-		{HD3, Red, Blinking},
+		{HD1, Blue, On},
 	}
 
 	for _, c := range calls {
@@ -220,7 +214,7 @@ func TestPlan_MatchesSetBehavior(t *testing.T) {
 			t.Fatalf("Set(%v,%v,%v): %v", c.zone, c.color, c.state, err)
 		}
 
-		for _, addr := range []int64{powerDataOut, powerBlinkEn, hdBayDataOut, hdBayBlinkEn} {
+		for _, addr := range []int64{powerDataOut, powerBlinkEn, hdBayReg1, hdBayReg2} {
 			a := mustRead(t, planMem, addr)
 			b := mustRead(t, setMem, addr)
 			if a != b {
@@ -250,6 +244,9 @@ func TestPlan_RejectsBadInput(t *testing.T) {
 		t.Error("Plan with invalid zone: want error, got nil")
 	} else if !strings.Contains(err.Error(), "99") {
 		t.Errorf("error = %q, want it to mention the value 99", err)
+	}
+	if _, err := Plan(HD0, Color(99), On); err == nil {
+		t.Error("Plan(HD0, invalid color, On): want error, got nil")
 	}
 }
 
@@ -318,13 +315,13 @@ func TestSet_RejectsBadInput(t *testing.T) {
 // to fuzz beyond the seed corpus.
 func FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
 	f.Add(int(Power), int(Red), int(On))
-	f.Add(int(HD3), int(Blue), int(Blinking))
+	f.Add(int(HD1), int(Blue), int(On))
 	f.Add(99, 99, 99)
 	f.Add(-1, -1, -1)
 
 	knownAddrs := map[int64]bool{
 		powerDataOut: true, powerBlinkEn: true,
-		hdBayDataOut: true, hdBayBlinkEn: true,
+		hdBayReg1: true, hdBayReg2: true,
 	}
 
 	f.Fuzz(func(t *testing.T, zone, color, state int) {
@@ -345,29 +342,33 @@ func FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
 // the actual led.Set API, not just raw regio calls - confirming the
 // fix's benefit is real at the level callers (this project's own
 // CLI, or any future caller sharing one Mem across goroutines) would
-// actually see it. Each HD-bay zone's Set only ever touches its own
-// bit (see hdBayBit: no "other color" bit to clear for non-Power
-// zones), so N goroutines each setting ONE distinct bay on led via
+// actually see it. HD0 and HD1's red bits are distinct (see
+// hdBayBits), so N goroutines each setting ONE distinct bay on via
 // Set concurrently must all survive, with no lost update.
 func TestSet_ConcurrentDistinctHDBaysAllSurvive(t *testing.T) {
 	mem := fakeregio.New(t)
-	zones := []Zone{HD0, HD1, HD2, HD3}
+	cases := []struct {
+		zone  Zone
+		color Color
+	}{
+		{HD0, Red}, {HD0, Blue}, {HD1, Red}, {HD1, Blue},
+	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(zones))
-	for _, z := range zones {
-		go func(z Zone) {
+	wg.Add(len(cases))
+	for _, c := range cases {
+		go func(zone Zone, color Color) {
 			defer wg.Done()
-			if err := Set(mem, z, Red, On); err != nil {
-				t.Errorf("Set(%v, Red, On): %v", z, err)
+			if err := Set(mem, zone, color, On); err != nil {
+				t.Errorf("Set(%v, %v, On): %v", zone, color, err)
 			}
-		}(z)
+		}(c.zone, c.color)
 	}
 	wg.Wait()
 
-	want := uint32(1<<13 | 1<<14 | 1<<15 | 1<<16) // HD0..HD3's own bits
-	got := mustRead(t, mem, hdBayDataOut)
+	want := uint32(1<<21 | 1<<25 | 1<<20 | 1<<23) // HD0 red+blue, HD1 red+blue
+	got := mustRead(t, mem, hdBayReg1)
 	if got != want {
-		t.Errorf("after 4 concurrent Set calls (one per HD bay): DataOut = 0x%x, want 0x%x (missing bits: 0x%x)", got, want, want&^got)
+		t.Errorf("after 4 concurrent Set calls: hdBayReg1 = 0x%x, want 0x%x (missing bits: 0x%x)", got, want, want&^got)
 	}
 }

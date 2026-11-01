@@ -319,6 +319,34 @@ copy exactly. See `pkg/mcu/ex2_test.go`'s
 `TestEX2_PowerLED_PausesBetweenFrames` (confirms the pause actually
 elapses, the opposite regression from the one this fixes).
 
+A fourth EX2 finding, HD-bay this time (`led hd0/hd1 ...`): took TWO
+rounds of wrong guesses to fix properly, and is the clearest example
+in this whole project of why guessing a hardware address/bit from a
+pattern match - even a plausible one - is not the same as confirming
+it. Round 1: a real-hardware report showed neither color on hd0/hd1
+had any effect; a live strace of the real, working `led hd0 red on`
+showed its `mmap2` mapped page `0xF1018000`, not the `0xF1010000`
+this tool used - the same page `pkg/fan/ex2.go`'s own confirmed
+registers live in, strongly suggesting a transcription slip. That
+fix kept the OLD in-page offset and bit formula on the NEW page -
+plausible, and still wrong: round 2's real-hardware retest still had
+no effect. Rather than guess a third time, a full scan of every word
+in the `0xF1018000` page, before and after each real on/off
+transition for both bays and both colors, settled it directly: the
+two registers this tool thought were a Data-Out/Blink-Enable pair
+(like Power's) actually change by the IDENTICAL bit together, every
+time; red and blue use entirely different, non-overlapping bits per
+bay; and the bit numbers (hd0 red=21/blue=25, hd1 red=20/blue=23)
+follow no formula at all - "bit 13+N" (a real match for the
+coincidentally-unrelated, always-constant `0xF1018100`) was simply
+wrong. Fixed by replacing the formula with a confirmed lookup table
+(`pkg/led/led.go`'s `hdBayBits`) and writing both registers
+identically; "blinking" and hd2/hd3 (EX4-only, untested) now report
+an explicit "unconfirmed" error instead of reusing a formula that had
+just been disproven for the cases that WERE tested. See
+`pkg/led/led_test.go`'s `TestSet_HDBayLED` (golden-byte, from the
+real capture) and `TestPlan_HD2HD3Unconfirmed`.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

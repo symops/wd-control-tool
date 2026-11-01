@@ -97,57 +97,55 @@ const (
 	powerDataOut = 0xF1010100
 	powerBlinkEn = 0xF1010108
 
-	// hdBayDataOut/hdBayBlinkEn: CORRECTED from 0xF1010140/0xF1010148
-	// after a real-hardware failure report (hd0/hd1 blue AND red both
-	// had no physical effect through this tool, despite the vendor's
-	// own `led hd0/hd1 ... on/off` working). A live strace of the
-	// vendor tool for `led hd0 red on` (confirmed to light the LED)
-	// showed its one `mmap2` of `/dev/mem` mapping page `0xF1018000` -
-	// not `0xF1010000`. That's the SAME page `pkg/fan/ex2.go`'s
-	// confirmed `ex2FanReg1`/`ex2FanReg2` (`0xf1018100`/`0xf1018140`)
-	// already live in, strongly suggesting the original value here
-	// was a single-digit transcription slip (`0x10` for `0x18`) during
-	// this project's own disassembly extraction, not a different
-	// physical window. `0xF1018140`/`0xF1018148` keeps the exact same
-	// byte offsets within the page (`0x140`/`0x148`) the OLD, wrong
-	// 0xF1010xxx values used - the EXACT bit offset within the
-	// corrected page has NOT been independently confirmed via a
-	// register readback (only the PAGE is confirmed by the mmap
-	// capture) - this is a strong, evidence-based hypothesis pending
-	// real-hardware confirmation, not yet a fully proven address. See
-	// SPEC.md, "LED (EX2/EX4)".
-	hdBayDataOut = 0xF1018140
-	hdBayBlinkEn = 0xF1018148
+	// hdBayReg1/hdBayReg2: CORRECTED from the old hdBayDataOut/
+	// hdBayBlinkEn (0xF1010140/0xF1010148) after a real-hardware
+	// failure report (hd0/hd1, both colors, had no physical effect
+	// through this tool despite the vendor's own `led hd0/hd1 ...
+	// on/off` working). A full 0xF1018000-page register scan,
+	// before/after every real on/off transition for both bays and
+	// both colors on real EX2 hardware, found the truth: these two
+	// registers ALWAYS change by the identical bit together - this
+	// is NOT a Data-Out/Blink-Enable pair the way Power's two
+	// registers are (no register here ever showed a DIFFERENT bit
+	// than the other for the same transition). See hdBayBits for the
+	// confirmed bits and SPEC.md, "LED (EX2/EX4)", for the full
+	// capture this came from.
+	hdBayReg1 = 0xF1018140
+	hdBayReg2 = 0xF1018150
 
 	redBit  = uint32(1) << 28
 	blueBit = uint32(1) << 29
 )
 
-// hdBayBit returns the Data-Out/Blink-Enable bit for a given bay
-// index (0-3). Confirmed for bay0-bay3 = bits 13-16.
-//
-// CAVEAT: this bit map was confirmed for the (presumably) red/primary
-// channel. The blue/activity channel's disassembly trace led into
-// SATA-controller register space (0xE0000000+) rather than this GPIO
-// window for at least one call site, which may mean hd-bay blue is
-// actually driven by a SATA activity indicator, not plain GPIO. This
-// has NOT been confirmed on real hardware. Treat Plan(HD0..HD3, Blue,
-// ...) as best-effort until verified - see SPEC.md, "unresolved".
-func hdBayBit(zone Zone) (uint32, error) {
-	var idx int
-	switch zone {
-	case HD0:
-		idx = 0
-	case HD1:
-		idx = 1
-	case HD2:
-		idx = 2
-	case HD3:
-		idx = 3
-	default:
+// hdBayBits: CONFIRMED on real EX2 hardware (see hdBayReg1's doc
+// comment) - deliberately a lookup table, not a formula: the bits
+// have no simple stride relating bay index to bit number (hd0
+// red=21/blue=25; hd1 red=20/blue=23 - a gap of 4 for hd0, 3 for
+// hd1). hd2/hd3 are EX4-only (EX2 only has hd0/hd1 - see SPEC.md) and
+// have NO confirmed bits at all: no EX4 hardware has been available
+// to test them, and the OLD "1<<(13+idx)" formula this table
+// replaces was proven wrong for hd0/hd1, so there is no reason left
+// to trust it for hd2/hd3 either - see hdBayBit, which reports that
+// plainly as an error rather than guessing.
+var hdBayBits = map[Zone]map[Color]uint32{
+	HD0: {Red: 1 << 21, Blue: 1 << 25},
+	HD1: {Red: 1 << 20, Blue: 1 << 23},
+}
+
+// hdBayBit looks up zone/color's confirmed bit (see hdBayBits).
+func hdBayBit(zone Zone, color Color) (uint32, error) {
+	byColor, ok := hdBayBits[zone]
+	if !ok {
+		if zone == HD2 || zone == HD3 {
+			return 0, errHDBayZoneUnconfirmed(zone)
+		}
 		return 0, errBadZone(zone)
 	}
-	return uint32(1) << (13 + idx), nil
+	bit, ok := byColor[color]
+	if !ok {
+		return 0, errBadColor(color)
+	}
+	return bit, nil
 }
 
 func colorBit(c Color) (uint32, uint32, error) {
@@ -164,57 +162,68 @@ func colorBit(c Color) (uint32, uint32, error) {
 // Plan computes the register writes driving zone's color LED to
 // state would perform, without touching any hardware - the pure half
 // of Set, used directly by the CLI's -n/--dry-run and -D/--debug
-// (and by Set itself). Mirrors the vendor handlers' own logic
-// exactly: the two colors on one zone are mutually exclusive (the
-// other color's bit is always cleared first), and "blinking" sets
-// the bit in BOTH the Data-Out and Blink-Enable registers - blinking
-// is a genuine hardware feature of the SoC's GPIO controller
-// (confirmed by EX2's own `led --help` text: "blue
+// (and by Set itself).
+//
+// Power: mirrors the vendor handlers' own logic - the two colors are
+// mutually exclusive (the other color's bit is always cleared
+// first), and "blinking" sets the bit in BOTH the Data-Out and
+// Blink-Enable registers - a genuine hardware feature of the SoC's
+// GPIO controller (confirmed by EX2's own `led --help` text: "blue
 // blinking(controlled by hw)"), not a software timer loop.
+//
+// HD-bay: a real register-page capture showed red/blue use entirely
+// DIFFERENT, non-overlapping bits (see hdBayBits) - there is no
+// confirmed mutual exclusion to enforce here (unlike Power), so this
+// only ever touches the requested color's own bit, in both
+// registers. No real on/off transition has ever produced a frame
+// matching a "blinking" state for HD-bay, so that's reported as an
+// error (errHDBayBlinkingUnconfirmed) rather than guessed.
 func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
-	var dataOut, blinkEn int64
-	var ownBit uint32
-	var otherBit uint32
-	var err error
-
 	if zone == Power {
-		dataOut, blinkEn = powerDataOut, powerBlinkEn
-		ownBit, otherBit, err = colorBit(color)
-	} else {
-		dataOut, blinkEn = hdBayDataOut, hdBayBlinkEn
-		ownBit, err = hdBayBit(zone)
-		// Only one bit per bay is confirmed (see hdBayBit's doc
-		// comment); there is no known "other color" bit to clear
-		// here, so otherBit stays 0.
+		ownBit, otherBit, err := colorBit(color)
+		if err != nil {
+			return nil, err
+		}
+		ws := []regio.Write{
+			{Addr: powerDataOut, Clear: otherBit},
+			{Addr: powerBlinkEn, Clear: otherBit},
+		}
+		switch state {
+		case Off:
+			ws = append(ws, regio.Write{Addr: powerDataOut, Clear: ownBit})
+			ws = append(ws, regio.Write{Addr: powerBlinkEn, Clear: ownBit})
+		case On:
+			ws = append(ws, regio.Write{Addr: powerDataOut, Set: ownBit})
+			ws = append(ws, regio.Write{Addr: powerBlinkEn, Clear: ownBit})
+		case Blinking:
+			ws = append(ws, regio.Write{Addr: powerDataOut, Set: ownBit})
+			ws = append(ws, regio.Write{Addr: powerBlinkEn, Set: ownBit})
+		default:
+			return nil, errBadState(state)
+		}
+		return ws, nil
 	}
+
+	bit, err := hdBayBit(zone, color)
 	if err != nil {
 		return nil, err
 	}
-
-	var ws []regio.Write
-
-	// Clear the other color first (power LED only - mutual exclusion
-	// confirmed there; no-op elsewhere since otherBit==0).
-	if otherBit != 0 {
-		ws = append(ws, regio.Write{Addr: dataOut, Clear: otherBit})
-		ws = append(ws, regio.Write{Addr: blinkEn, Clear: otherBit})
-	}
-
 	switch state {
 	case Off:
-		ws = append(ws, regio.Write{Addr: dataOut, Clear: ownBit})
-		ws = append(ws, regio.Write{Addr: blinkEn, Clear: ownBit})
+		return []regio.Write{
+			{Addr: hdBayReg1, Clear: bit},
+			{Addr: hdBayReg2, Clear: bit},
+		}, nil
 	case On:
-		ws = append(ws, regio.Write{Addr: dataOut, Set: ownBit})
-		ws = append(ws, regio.Write{Addr: blinkEn, Clear: ownBit})
+		return []regio.Write{
+			{Addr: hdBayReg1, Set: bit},
+			{Addr: hdBayReg2, Set: bit},
+		}, nil
 	case Blinking:
-		ws = append(ws, regio.Write{Addr: dataOut, Set: ownBit})
-		ws = append(ws, regio.Write{Addr: blinkEn, Set: ownBit})
+		return nil, errHDBayBlinkingUnconfirmed(zone, color)
 	default:
 		return nil, errBadState(state)
 	}
-
-	return ws, nil
 }
 
 // Set drives zone's color LED to state against real (or fake, in

@@ -373,54 +373,58 @@ of the real `led` tool for `led hd0/hd1 blue/red on/off` shows exactly
 4 `openat(.../dev/mem...)` calls per command (read+write, clear+set -
 see "on"/"off" below), matching this mechanism.
 
-**Register page: CORRECTED from `0xF1010140`/`0xF1010148`** after a
-real-hardware failure report (neither color on hd0/hd1 had any
-physical effect through this tool, despite the vendor's own `led
-hd0/hd1 ... on/off` working). A live strace of the real, working
-`led hd0 red on` showed its `mmap2` of `/dev/mem` mapping page
-`0xF1018000`, not `0xF1010000` - the SAME page `pkg/fan/ex2.go`'s
-confirmed `ex2FanReg1`/`ex2FanReg2` (`0xf1018100`/`0xf1018140`)
-already live in. The original `0xF1010140`/`0xF1010148` was almost
-certainly a single-digit transcription slip (`0x10` for `0x18`)
-during this project's own disassembly extraction. `0xF1018140`/
-`0xF1018148` keeps the exact same in-page byte offsets (`0x140`/
-`0x148`) the old, wrong values used - **the page is now confirmed by
-the mmap capture, but the exact bit offset within it is still only a
-strong hypothesis, not independently confirmed via a register
-readback** (a `busybox devmem` read of the OLD address, before and
-after the real, working `led hd0 red on`, showed `0x00000000` both
-times either way - consistent with the old address being entirely
-wrong, but not yet positive confirmation the new one is right).
+**Registers and bits: fully re-derived from a real register-page
+capture**, after TWO rounds of wrong guesses. First, a real-hardware
+failure report showed neither color on hd0/hd1 had any physical
+effect through this tool, despite the vendor's own `led hd0/hd1 ...
+on/off` working. A live strace of the real, working `led hd0 red on`
+showed its `mmap2` of `/dev/mem` mapping page `0xF1018000`, not
+`0xF1010000` - the SAME page `pkg/fan/ex2.go`'s confirmed
+`ex2FanReg1`/`ex2FanReg2` (`0xf1018100`/`0xf1018140`) already live
+in; the original `0xF1010140`/`0xF1010148` was almost certainly a
+single-digit transcription slip (`0x10` for `0x18`). That fix kept
+the OLD in-page offsets (`0x140`/`0x148`) and the OLD bit formula
+(`13+N`) on the new page - **also wrong**: real hardware still
+didn't light up. Rather than guess a third time, a full scan of
+every word in the `0xF1018000` page was taken before and after each
+real on/off transition for both bays and both colors. The results:
 
-| LED | Data-Out | Blink-Enable | Red bit | Blue bit |
-|---|---|---|---|---|
-| HD-bay (bay N, N=0..3) | `0xF1018140` | `0xF1018148` | bit `13+N` | **unconfirmed, see below** |
+| LED | Reg 1 | Reg 2 | hd0 red | hd0 blue | hd1 red | hd1 blue |
+|---|---|---|---|---|---|---|
+| HD-bay | `0xF1018140` | `0xF1018150` | bit 21 | bit 25 | bit 20 | bit 23 |
 
-- `on`: clear the other color's bit in both registers (the two colors
-  on one zone are mutually exclusive - one bi-color LED), then set own
-  bit in Data-Out, clear own bit in Blink-Enable.
-- `off`: clear own bit in both registers (and the other color's, same
-  as `on`).
-- `blinking`: set own bit in **both** Data-Out and Blink-Enable -
-  blinking is a genuine hardware feature of the SoC's GPIO controller
-  (confirmed by EX2's own `led --help` text: "blue blinking(controlled
-  by hw)"), not a software timer loop.
+Confirmed facts this capture established, replacing every earlier
+assumption:
+
+- **The two registers are NOT a Data-Out/Blink-Enable pair** the way
+  Power's two registers are - every single transition changed the
+  identical bit in BOTH registers together, never one register
+  differently from the other. `wd-control-tool` writes both
+  registers identically for `on`/`off`.
+- **Red and blue use entirely different, non-overlapping bits** per
+  bay - there is no confirmed mutual exclusion between them (unlike
+  Power's one bi-color LED), so `on`/`off` only ever touch the
+  requested color's own bit, never the other color's.
+- **The bit numbers follow no simple formula** - hd0's red-to-blue
+  gap is 4 bits, hd1's is 3; bit 13+N (the old guess) matches none of
+  the 4 confirmed values. `0xF1018100` (bit 13 = `0x2000`) was a
+  coincidence: that register holds a constant `0x00002000` across
+  every transition tested - unrelated to LED control.
+- **`blinking` has no confirmed register behavior at all** - no real
+  transition was ever tested for it, and guessing one from the old,
+  disproven model would repeat the same mistake. `wd-control-tool`
+  reports it as an error (`errHDBayBlinkingUnconfirmed`) instead.
+- **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
+  hardware has been available to test them, and the formula that
+  would have predicted them was proven wrong for hd0/hd1, so
+  `wd-control-tool` reports them as unconfirmed
+  (`errHDBayZoneUnconfirmed`) rather than keep guessing with it.
 
 `libalpha_common.so` (also linked by `led`) exports **no**
 hardware-access functions at all - its entire ~99-function export
 table is xmldb/disk/RAID/volume bookkeeping. The one call `led` makes
 into it (`dbSetSocket`) is pure software state-tracking, unrelated to
 the physical write.
-
-**Unresolved / caveat**: the HD-bay LED's *blue* channel's dispatch
-traced, in at least one call site, into **SATA-controller register
-space** (`0xE0000000`-based) rather than this GPIO window - possibly
-meaning the blue/activity indicator is tied to a SATA activity
-register rather than plain GPIO, or possibly a mis-trace of a shared
-helper used for something else at that call site. **Not confirmed on
-real hardware.** wd-control-tool implements HD-bay blue with the same
-GPIO bit scheme as a best-effort pending that confirmation - treat it
-as unverified.
 
 ### Power LED - MCU (`NewPWRLed`), confirmed on real EX2 hardware - NOT `/dev/mem`
 
