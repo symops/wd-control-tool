@@ -95,6 +95,20 @@ func TestRun_HelpDocumentsTempCommandCurrentBehavior(t *testing.T) {
 	}
 }
 
+// -h's led section claimed "blinking" works for every ex2/ex4 zone -
+// no longer true: hd-bay blinking has no confirmed register behavior
+// (see pkg/led's hdBayBits/errHDBayBlinkingUnconfirmed) and reports
+// an error. Pin that the caveat is actually documented.
+func TestRun_HelpDocumentsHDBayBlinkingCaveat(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-h"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "blinking is confirmed only for the power zone") {
+		t.Errorf("-h output missing the HD-bay blinking caveat: out=%q", out)
+	}
+}
+
 func TestRun_HelpAndVersionMustBeAlone(t *testing.T) {
 	if code, out, _ := captureRun(t, []string{"-h"}); code != exitOK || !strings.Contains(out, "wd-control-tool -b BOARD") {
 		t.Errorf("-h: code=%d out=%q", code, out)

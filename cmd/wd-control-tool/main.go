@@ -349,6 +349,9 @@ chained in one command, run in the order given:
 
 led's own arguments:
   ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking(blink)
+                    blinking is confirmed only for the power zone - hd-bay blinking
+                    has no confirmed register behavior and reports an error; hd2/hd3
+                    (EX4 only) are unconfirmed in every state, same reason
   ex2u:      STATE              states: on,off,blinking(blink),breathing(breathe)
 
 Modifiers (may appear anywhere, apply to every action in the command):
