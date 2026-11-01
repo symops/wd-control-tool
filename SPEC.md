@@ -293,11 +293,15 @@ else.
 - **EX2**: **direct physical-register writes, no MCU involved at
   all** for setting speed (confirmed: EX2's `LIB_Set_Fan_Speed` never
   calls `up_send_ctl`/touches the UART). Registers (base `0xf1000000`,
-  the same Kirkwood-class "internal registers" window LED uses at a
-  different offset):
+  the same Kirkwood-class "internal registers" window LED uses):
   - `0xf1018100` ("reg1"): one-hot bits `0x40`/`0x100`/`0x800`/
     `0x1000`/`0x10000`.
-  - `0xf1018140` ("reg2"): one-hot bit `0x1`.
+  - `0xf1018140` ("reg2"): one-hot bit `0x1` - this is the EXACT SAME
+    physical register as HD-bay LED's `hdBayReg1` (see "LED
+    (EX2/EX4)" below), not merely the same window at a different
+    offset: the two subsystems share this one register on entirely
+    disjoint bits (fan: bit 0 only; HD-bay LED: bits 20/21/23/25),
+    safely, via atomic read-modify-write.
   - Clearing mask confirmed as `0x11940` (reg1) / `0x1` (reg2) -
     exactly the union of the bits above; "stop" clears every fan bit.
   - `fan_control -f N` on EX2 (`N` = 0-6; **7 and 8 clamp to 6's
