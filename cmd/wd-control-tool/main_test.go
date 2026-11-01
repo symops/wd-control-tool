@@ -57,6 +57,24 @@ func captureRun(t *testing.T, args []string) (code int, stdout, stderr string) {
 	return
 }
 
+// -h/--help previously documented every flag EXCEPT -b/--board itself
+// (the one actually-required flag) - fixed per explicit user request
+// to cover every parameter, not just the action flags. Pin that the
+// help text actually explains -b/--board's values and its
+// repeated-value/conflict rule, not just mention it in the usage
+// line.
+func TestRun_HelpDocumentsBoardFlag(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-h"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	for _, want := range []string{"-b, --board BOARD", "ex2u", "ex2-ultra", "usage error", "harmless"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-h output missing %q: out=%q", want, out)
+		}
+	}
+}
+
 func TestRun_HelpAndVersionMustBeAlone(t *testing.T) {
 	if code, out, _ := captureRun(t, []string{"-h"}); code != exitOK || !strings.Contains(out, "wd-control-tool -b BOARD") {
 		t.Errorf("-h: code=%d out=%q", code, out)

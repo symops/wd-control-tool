@@ -322,17 +322,23 @@ func run(args []string) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `wd-control-tool -b BOARD [-n] [-D] <ACTION>...
+	fmt.Fprint(w, `wd-control-tool -b BOARD [-n] [-D] [--serial PATH] <ACTION>...
 wd-control-tool -h | --help
 wd-control-tool -v | --version
+
+-b, --board BOARD   required: ex2u, ex2, or ex4 (ex2u aliases: ex2-ultra, ex2ultra).
+                    May appear anywhere on the command line and applies to every
+                    action in the command. Repeating it with a DIFFERENT value is
+                    a usage error (repeating the SAME value, or an alias of it, is
+                    harmless).
 
 Each ACTION is a mode flag followed directly by its own fixed number
 of arguments - no delimiter is needed, and several actions can be
 chained in one command, run in the order given:
-  -l, --led ...       led command (see below)
-  -f, --fan LEVEL     board-native units - see README.md
-  -r, --rtc write      ex4 only for now - see SPEC.md
-  -d, --display TEXT   ex4 only
+  -l, --led ...       led command (see below) - ex2u, ex2, ex4
+  -f, --fan LEVEL     board-native units, NOT 0-100 - see README.md - ex2u, ex2, ex4
+  -r, --rtc write      push the host's current time to the MCU RTC; no read-back - ex4 only
+  -d, --display TEXT   write text to the front-panel LCD, taken verbatim - ex4 only
 
 led's own arguments:
   ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking(blink)
@@ -349,6 +355,8 @@ Examples:
   wd-control-tool -b ex2 --led power blue on -f 1
 
 Exit codes: 0 ok, 1 usage/argument error, 2 not supported on this board, 3 hardware I/O error.
+
+Full reference, including per-board hardware details: README.md and SPEC.md.
 `)
 }
 
