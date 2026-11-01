@@ -25,29 +25,31 @@ func TestEX2_Set(t *testing.T) {
 		return v
 	}
 
-	// Level 2 -> ex2FanBits[1] = {reg1, 0x100} per the current
-	// (inferred, see SPEC.md) ordering.
+	// Level 2 -> ex2FanBits[1] = {reg1, 0x1000} - confirmed on real
+	// EX2 hardware via fan_control's own RPM read-back (5357 RPM),
+	// not the jump-table-order guess this used to be. See ex2.go.
 	if err := f.Set(2); err != nil {
 		t.Fatalf("Set(2): %v", err)
 	}
-	if got := readReg1(t); got != 0x100 {
-		t.Errorf("after Set(2): reg1 = 0x%x, want 0x100", got)
+	if got := readReg1(t); got != 0x1000 {
+		t.Errorf("after Set(2): reg1 = 0x%x, want 0x1000", got)
 	}
 	if got := readReg2(t); got != 0 {
 		t.Errorf("after Set(2): reg2 = 0x%x, want 0", got)
 	}
 
-	// Level 6 -> ex2FanBits[5] = {reg2, 0x1}. Switching levels must
-	// clear the PREVIOUS level's bit too (Clear_All_Fan_Register is
-	// called every time, not just on Set(0)).
-	if err := f.Set(6); err != nil {
-		t.Fatalf("Set(6): %v", err)
+	// Level 5 -> ex2FanBits[4] = {reg2, 0x1} (confirmed 8333 RPM).
+	// Switching levels must clear the PREVIOUS level's bit too
+	// (Clear_All_Fan_Register is called every time, not just on
+	// Set(0)).
+	if err := f.Set(5); err != nil {
+		t.Fatalf("Set(5): %v", err)
 	}
 	if got := readReg1(t); got != 0 {
-		t.Errorf("after Set(6): reg1 = 0x%x, want 0 (previous level's bit should be cleared)", got)
+		t.Errorf("after Set(5): reg1 = 0x%x, want 0 (previous level's bit should be cleared)", got)
 	}
 	if got := readReg2(t); got != 0x1 {
-		t.Errorf("after Set(6): reg2 = 0x%x, want 0x1", got)
+		t.Errorf("after Set(5): reg2 = 0x%x, want 0x1", got)
 	}
 
 	// Level 0 (Stop) clears everything.

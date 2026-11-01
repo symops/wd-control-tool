@@ -1,6 +1,9 @@
 package mcu
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // EX2's legacy MCU, /dev/ttyS1, 115200 8N1 (note: different baud from
 // EX4's 19200 - confirmed, do not assume parity).
@@ -68,11 +71,66 @@ func (m *EX2) FanFull() error { return sendLegacy(m.p, buildFixedFrame(ex2FanFul
 
 func (m *EX2) DeviceReady() error { return sendLegacy(m.p, buildFixedFrame(ex2DeviceReady)) }
 
-// RequestThermal/RequestFanStatus send the sensor-read requests; as on
-// EX4, this tool does not yet parse the MCU's reply frame (see
-// SPEC.md, "unresolved").
+// RequestThermal sends ThermalGet's request; as on EX4, this tool
+// does not parse the MCU's reply frame for this one (see SPEC.md,
+// "unresolved"). RequestFanStatus's reply, unlike ThermalGet's, IS
+// decoded - see FanStatusReply/EX2DecodeFanRPM.
 func (m *EX2) RequestThermal() error   { return sendLegacy(m.p, buildFixedFrame(ex2ThermalGet)) }
 func (m *EX2) RequestFanStatus() error { return sendLegacy(m.p, buildFixedFrame(ex2FanStatusGet)) }
+
+// EX2FanStatusRequestFrame is FanStatusGet's fixed request frame -
+// the pure builder -n/--dry-run and -D/--debug use.
+func EX2FanStatusRequestFrame() []byte { return buildFixedFrame(ex2FanStatusGet) }
+
+// FanStatusReply sends the FanStatusGet request and returns whatever
+// raw bytes the MCU replies with within timeout - possibly none.
+// Deliberately returns the UNDECODED bytes; see EX2DecodeFanRPM for
+// the decode, layered on top rather than built in, matching this
+// project's EX2U TempReply/EX2UDecodeTempCelsius split.
+func (m *EX2) FanStatusReply(timeout time.Duration) ([]byte, error) {
+	if err := m.RequestFanStatus(); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 64)
+	n, err := m.p.recvBytes(buf, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
+// EX2DecodeFanRPM decodes a FanStatusGet reply (as returned by
+// FanStatusReply) into an RPM value.
+//
+// Hardware-confirmed: a live strace of the real `fan_control -g 4`
+// on real EX2 hardware printed "fan rpm = 5172" while the captured
+// reply was `FA 03 09 00 00 3A FB` - byte 5 (0x3A = 58 decimal) is a
+// tachometer PERIOD, and 300000/58 = 5172.41, truncating to exactly
+// 5172. Cross-confirmed against 6 OTHER independently measured RPM
+// values (one per fan level, read back the same way right after
+// setting each level - see pkg/fan/ex2.go) with no raw byte captured
+// for those: every one of 9090/7317/4411/5357/6521/8333 round-trips
+// EXACTLY through this same formula (RPM -> nearest integer period
+// -> 300000/period, truncated) - an extraordinary coincidence if the
+// formula were wrong, not just a one-off match.
+//
+// A period of 0 reports RPM 0 rather than dividing by zero - this is
+// the arithmetically safe choice (a stopped fan logically reads 0),
+// not a hardware claim: no real capture has a period of 0 to confirm
+// what the MCU actually sends for a stopped fan.
+func EX2DecodeFanRPM(reply []byte) (int, error) {
+	if len(reply) < 7 {
+		return 0, fmt.Errorf("mcu: fan status reply too short (%d byte(s), want at least 7): % X", len(reply), reply)
+	}
+	if reply[0] != legacyStart || reply[6] != legacyEnd {
+		return 0, fmt.Errorf("mcu: fan status reply % X doesn't match the expected FA..FB frame shape", reply[:7])
+	}
+	period := reply[5]
+	if period == 0 {
+		return 0, nil
+	}
+	return 300000 / int(period), nil
+}
 
 // EX2PowerLEDFrames builds the two NewPWRLed frames the real `led`
 // tool sends for one `led power COLOR STATE` call: first clears the

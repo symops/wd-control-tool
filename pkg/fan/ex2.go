@@ -22,15 +22,22 @@ import (
 // Set accepts 0-6 (fan_control -f N's own documented range: 0=Stop,
 // 1..6 = RPM steps ~4000..9000 in 1000rpm increments).
 //
-// CAVEAT: the real binary's jump table confirms these exact 6
-// non-zero bitmasks exist and that each level sets exactly one of
-// them, but the disassembly dump available to this tool did not
-// independently pin down which bitmask belongs to which specific
-// level number - the ascending order below is inferred from the jump
-// table's natural case order, not independently verified per level.
-// The relative ordering (higher level = faster fan) should still
-// hold even if a specific level's exact RPM is off; verify against
-// real hardware before relying on an exact RPM target. See SPEC.md.
+// Level-to-bitmask order CONFIRMED on real EX2 hardware via the
+// vendor fan_control's own `-g` RPM read-back (not just relative
+// feel): the disassembly-order guess below was WRONG - verified
+// level 2 spinning faster than level 3 on real hardware, then fixed
+// by setting each of wd-control-tool's own levels 1-6 in turn and
+// reading real RPM after each:
+//
+//	level 1 = 4411 RPM   level 4 = 7317 RPM
+//	level 2 = 5357 RPM   level 5 = 8333 RPM
+//	level 3 = 6521 RPM   level 6 = 9090 RPM
+//
+// (~1000 RPM per step, matching this file's documented ~4000-9000
+// range exactly - strong confirmation, not a coincidence). The jump
+// table's natural case order had levels 1-6 as
+// 0x40,0x100,0x800,0x1000,0x10000,reg2:0x1 - the real order is
+// 0x800,0x1000,0x10000,0x100,reg2:0x1,0x40 (see ex2FanBits below).
 type EX2 struct{ Mem *regio.Mem }
 
 const (
@@ -45,12 +52,12 @@ var ex2FanBits = [...]struct {
 	reg int64
 	bit uint32
 }{
-	{ex2FanReg1, 0x40},
-	{ex2FanReg1, 0x100},
-	{ex2FanReg1, 0x800},
-	{ex2FanReg1, 0x1000},
-	{ex2FanReg1, 0x10000},
-	{ex2FanReg2, 0x1},
+	{ex2FanReg1, 0x800},   // level 1, confirmed 4411 RPM
+	{ex2FanReg1, 0x1000},  // level 2, confirmed 5357 RPM
+	{ex2FanReg1, 0x10000}, // level 3, confirmed 6521 RPM
+	{ex2FanReg1, 0x100},   // level 4, confirmed 7317 RPM
+	{ex2FanReg2, 0x1},     // level 5, confirmed 8333 RPM
+	{ex2FanReg1, 0x40},    // level 6, confirmed 9090 RPM
 }
 
 // Ex2FanPlan computes the register writes Set(level) would perform,

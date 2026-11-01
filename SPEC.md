@@ -289,25 +289,55 @@ known, deliberate v1 limitation, not an oversight - see "Unresolved".
   - `0xf1018140` ("reg2"): one-hot bit `0x1`.
   - Clearing mask confirmed as `0x11940` (reg1) / `0x1` (reg2) -
     exactly the union of the bits above; "stop" clears every fan bit.
-  - `fan_control -f N` on EX2 (`N` = 0-6) maps to `0`=Stop + 6 fixed
-    RPM steps (~4000-9000rpm). The jump table confirms exactly 6
-    non-zero bitmask options exist and each level sets exactly one,
-    but **which bitmask belongs to which specific level number was
-    not independently confirmed** - wd-control-tool's `pkg/fan/ex2.go`
-    uses the bitmasks' disassembly order as an inferred level mapping
-    (ascending jump-table case order). The relative ordering (higher
-    level = faster) should hold even if a specific level's exact RPM
-    is off; verify against real hardware before relying on an exact
-    target.
+  - `fan_control -f N` on EX2 (`N` = 0-6; **7 and 8 clamp to 6's
+    behavior on real hardware**, confirmed via the vendor tool
+    itself - the valid range really is 0-6, not wider) maps to
+    `0`=Stop + 6 fixed RPM steps.
+  - **Level-to-bitmask order: CORRECTED, confirmed on real hardware**
+    via the vendor `fan_control`'s own `-g` RPM read-back (see "Fan
+    status read-back" below), not just relative "feels faster/
+    slower" - an earlier version of this spec (and of
+    `wd-control-tool`'s own `pkg/fan/ex2.go`) inferred the order from
+    the jump table's natural case order, which was WRONG (confirmed
+    the hard way: level 2 measurably spun faster than level 3). The
+    real order, each level's bit read back after setting it:
+
+    | Level | Register:bit | RPM |
+    |---|---|---|
+    | 1 | reg1:`0x800` | 4411 |
+    | 2 | reg1:`0x1000` | 5357 |
+    | 3 | reg1:`0x10000` | 6521 |
+    | 4 | reg1:`0x100` | 7317 |
+    | 5 | reg2:`0x1` | 8333 |
+    | 6 | reg1:`0x40` | 9090 |
+
+    (~1000rpm per step, matching the ~4000-9000rpm range this spec
+    already documented - strong corroboration, not a coincidence.)
   - EX2 *also* exposes `FanStop`/`FanHalf`/`FanFull` over the legacy
     MCU protocol (see table above) - a separate, apparently-unused-by-
     `fan_control` control surface. wd-control-tool does not currently
     call it.
 
-Both EX2 and EX4 read sensors (`ThermalGet`/`GetThemister`,
-`FanStatusGet`) over the MCU/UART, but **this tool cannot parse the
-reply** (see "Request/response" above) - sensor reading is not
-implemented.
+### Fan status read-back (EX2 `FanStatusGet` reply - CONFIRMED)
+
+Unlike every other MCU reply in this spec (see "Unresolved" below),
+EX2's `FanStatusGet` reply is now decoded: a live strace of the real
+`fan_control -g 4` printed `fan rpm = 5172` while the captured reply
+was `FA 03 09 00 00 3A FB` (`0x3A` = 58 decimal). Byte 5 is a
+tachometer **period**, not RPM directly: `300000/58 = 5172.41`,
+truncating to exactly `5172` (plain C-style integer division, same
+truncation behavior as `tmp_get_c`'s F-to-C conversion on EX2U).
+Cross-confirmed against the 6 RPM values in the level table above
+(no raw byte captured for those, but every single one round-trips
+exactly through `period = round(300000/rpm)`, `300000/period`
+truncated - would be an extraordinary coincidence otherwise). See
+`pkg/mcu/ex2.go`'s `EX2DecodeFanRPM`; `wd-control-tool -b ex2 -f rpm`
+exposes this.
+
+Both EX2 and EX4 read other sensors too (`ThermalGet`/
+`GetThemister`), but **this tool cannot parse those replies** (see
+"Request/response" above) - only `FanStatusGet`'s RPM reply has been
+decoded so far.
 
 ## LED (EX2/EX4)
 
@@ -429,30 +459,30 @@ display at all.
 ## Unresolved (tracked here so future work doesn't re-derive it)
 
 1. **The MCU-to-host reply frame format** is mostly still undecoded,
-   with one exception: EX2U's `tmp_get` reply is now confirmed (see
-   "EX2U protocol" above and `wd-control-tool -b ex2u -t`, which
-   decodes it into `Temperature: N C`) - it reuses the same 7-byte
+   with two exceptions now: EX2U's `tmp_get` reply (see "EX2U
+   protocol" above, `wd-control-tool -b ex2u -t`) and EX2's
+   `FanStatusGet` reply (see "Fan status read-back" above,
+   `wd-control-tool -b ex2 -f rpm`) - both reuse the same 7-byte
    `FA .. FB` shape as every request, with the answer in byte 5.
    Still unknown: the general request/reply correlation mechanism
-   (does every command get a reply, or only reads?), EX2/EX4's
-   "legacy" reply framing (a different, undecoded protocol - see
-   below), RTC read-back (`rtc -s`'s actual direction), fan-status
-   reads, any acknowledgement that a write command was received, and
-   the stray trailing byte seen after EX2U's own `tmp_get` reply
-   (possibly an unprompted second reply - needs another capture to
-   confirm). Closing the EX2/EX4 side needs either a full decompile
-   of `up_read_daemon`'s `RS232_Read` parsing loop, or (more
-   reliably, per this project's own house rule - proven twice now on
-   EX2U) a live UART capture of a real reply.
+   (does every command get a reply, or only reads?), EX2/EX4's other
+   sensor reads (`ThermalGet`/`GetThemister`), RTC read-back (`rtc
+   -s`'s actual direction), any acknowledgement that a write command
+   was received, and the stray trailing byte seen after EX2U's own
+   `tmp_get` reply (possibly an unprompted second reply - needs
+   another capture to confirm). Closing the rest needs either a full
+   decompile of `up_read_daemon`'s `RS232_Read` parsing loop, or (more
+   reliably, per this project's own house rule - proven 3 times now)
+   a live UART capture of a real reply.
 2. **EX2's `WDateAndTime`/`RDateAndTime` write-side frame layout** -
    header bytes are known (table dump above) but the handler that
    builds the frame from them was not independently decompiled the
    way EX4's was.
 3. **HD-bay blue LED channel** - possible SATA-register involvement,
    not GPIO; see "LED" above.
-4. **EX2's fan level-to-bitmask order** - the 6 bitmasks are confirmed
-   to exist; which exact level (1-6) maps to which was inferred from
-   disassembly order, not independently verified per level.
+4. ~~EX2's fan level-to-bitmask order~~ - **resolved**, see "Fan
+   control" above (was wrong; confirmed and fixed via real-hardware
+   RPM read-back).
 5. Two anomalous command-table rows that don't fit the normal
    category-byte scheme: EX2's `pwmspeed` (b4=`0x27`), EX4's
    `ErrStatus` (b4=`0x55`). Not investigated (not needed for this

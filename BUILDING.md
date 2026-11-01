@@ -274,6 +274,33 @@ in the other direction. See `pkg/mcu/ex2_test.go`'s
 `cmd/wd-control-tool/main_test.go`'s
 `TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase`.
 
+Two more real-hardware findings, same EX2 fan subsystem: first, "EX2
+level 2 spins faster than level 3" - `pkg/fan/ex2.go`'s level-to-
+bitmask order had been *inferred* from the real binary's jump-table
+case order (never independently verified per level, flagged as such
+in SPEC.md), and that inferred order was wrong. Fixed by setting each
+of this tool's own levels 1-6 on real hardware and reading the real
+RPM back after each one (via the vendor `fan_control -g`, since this
+tool couldn't read RPM yet at that point) - the real order turned out
+to be a near-exact ~1000rpm-per-step progression once sorted by
+measured RPM, not the jump table's case order.
+
+That RPM read-back led to the second finding: `fan_control -g`'s
+reply decodes cleanly. A live strace (with `read` traced, not just
+`write` - the first attempt only traced `write` and missed the
+reply entirely) captured `FA 03 09 00 00 3A FB` alongside `fan_control`
+printing "fan rpm = 5172"; `0x3A` = 58, and `300000/58` truncates to
+exactly 5172. The same formula round-trips exactly through all 6 RPM
+values from the level-reordering investigation above (no raw byte
+captured for those, but exact agreement across 6 independent
+measurements is strong corroboration on its own). Added
+`mcu.EX2DecodeFanRPM`/`(*EX2).FanStatusReply`, exposed as
+`wd-control-tool -b ex2 -f rpm` (`-f`'s argument doubles as a command,
+not just a level - see `cmd/wd-control-tool/main.go`'s
+`buildEX2FanRPMAction`). See `pkg/mcu/ex2_test.go`'s
+`TestEX2DecodeFanRPM_RealCapturedReply` and
+`TestEX2DecodeFanRPM_CrossValidatedAgainstMeasuredLevels`.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

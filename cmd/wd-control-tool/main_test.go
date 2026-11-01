@@ -862,6 +862,76 @@ func TestRun_RealRun_EX2UTemp_DecodesRealCapturedReply(t *testing.T) {
 	}
 }
 
+// End-to-end CLI version of mcu.TestEX2DecodeFanRPM_RealCapturedReply:
+// feeds the exact bytes captured on real EX2 hardware via
+// fan_control -g and confirms the default (non-debug) output is
+// exactly "fan rpm = 5172", matching the vendor's own wording.
+func TestRun_RealRun_EX2FanRPM_DecodesRealCapturedReply(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildAction(board.EX2, "fan", fake.SlavePath, []string{"rpm"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the FanStatusGet request
+	realCapturedReply := []byte{0xFA, 0x03, 0x09, 0x00, 0x00, 0x3A, 0xFB}
+	if _, err := fake.Master.Write(realCapturedReply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if strings.Contains(out, "FA 03 09 00 00 3A FB") {
+		t.Errorf("stdout=%q, raw reply bytes must not be printed without -D", out)
+	}
+	if !strings.Contains(out, "fan rpm = 5172") {
+		t.Errorf("stdout=%q, want the decoded \"fan rpm = 5172\" line", out)
+	}
+}
+
+func TestRun_EX2FanRPM_UnsupportedOnOtherBoards(t *testing.T) {
+	for _, b := range []string{"ex4", "ex2u"} {
+		code, _, errOut := captureRun(t, []string{"-b", b, "-f", "rpm"})
+		if code != exitUnsupported {
+			t.Errorf("board %s: code=%d, want %d; err=%q", b, code, exitUnsupported, errOut)
+		}
+		if !strings.Contains(errOut, "fan rpm read is not supported") {
+			t.Errorf("board %s: errOut=%q", b, errOut)
+		}
+	}
+}
+
+func TestRun_DryRun_EX2FanRPM(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-D", "-f", "rpm"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "FA 03 09 00 00 00 FB") {
+		t.Errorf("out=%q, want the FanStatusGet request frame", out)
+	}
+	if !strings.Contains(out, "would request fan RPM") {
+		t.Errorf("out=%q, missing the dry-run description line", out)
+	}
+}
+
 // Mirrors TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes but for the
 // outcome every real capture of this command has actually shown so
 // far: nothing comes back. Confirms apply() reports that plainly

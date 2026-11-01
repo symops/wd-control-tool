@@ -342,6 +342,7 @@ of arguments - no delimiter is needed, and several actions can be
 chained in one command, run in the order given:
   -l, --led ...       led command (see below) - ex2u, ex2, ex4
   -f, --fan LEVEL     board-native units, NOT 0-100 - see README.md - ex2u, ex2, ex4
+  -f, --fan rpm       read back the current fan RPM instead of setting a level - ex2 only
   -r, --rtc write      push the host's current time to the MCU RTC; no read-back - ex4 only
   -d, --display TEXT   write text to the front-panel LCD, taken verbatim - ex4 only
   -t, --temp           request temperature and print the raw, undecoded MCU reply (see SPEC.md) - ex2u only, no arguments
@@ -414,6 +415,15 @@ func runAction(a *action, dryRun, debug bool) int {
 func buildAction(b board.Board, mode, serialPath string, args []string, debug bool) (*action, int) {
 	switch mode {
 	case "fan":
+		// "-f rpm" is a special argument value, not a level: read the
+		// current fan RPM instead of setting a speed. EX2-only - see
+		// buildEX2FanRPMAction.
+		if args[0] == "rpm" {
+			if b != board.EX2 {
+				return unsupportedErr("fan rpm read is not supported on board %v", b)
+			}
+			return buildEX2FanRPMAction(serialPath, debug)
+		}
 		return buildFanAction(b, serialPath, args)
 	case "led":
 		return buildLEDAction(b, serialPath, args)
@@ -489,6 +499,51 @@ func buildFanAction(b board.Board, serialPath string, args []string) (*action, i
 	default:
 		return unsupportedErr("fan is not supported on board %v", b)
 	}
+}
+
+// ex2FanRPMReplyTimeout is how long buildEX2FanRPMAction waits for a
+// reply after sending the FanStatusGet request - matches
+// ex2uTempReplyTimeout's reasoning (generous relative to a real
+// capture, where the reply arrived almost immediately).
+const ex2FanRPMReplyTimeout = 2 * time.Second
+
+// buildEX2FanRPMAction sends EX2's FanStatusGet request and prints
+// the decoded RPM, matching the vendor fan_control -g's own "fan rpm
+// = N" wording - see mcu.EX2DecodeFanRPM for the confirmed decode.
+// EX2-only: no equivalent read has been captured for EX4/EX2U.
+func buildEX2FanRPMAction(serialPath string, debug bool) (*action, int) {
+	frame := mcu.EX2FanStatusRequestFrame()
+	return &action{
+		describe:   fmt.Sprintf("request fan RPM from EX2 MCU (%s)", serialPath),
+		debugLines: frameDebugLines(nil, frame, serialPath, ex2LegacyBaud),
+		apply: func() error {
+			p, err := mcu.Open(serialPath, ex2LegacyBaud)
+			if err != nil {
+				return err
+			}
+			defer p.Close()
+			reply, err := mcu.NewEX2(p).FanStatusReply(ex2FanRPMReplyTimeout)
+			if err != nil {
+				return err
+			}
+			if debug {
+				fmt.Printf("debug: reply=% X\n", reply)
+			}
+			if len(reply) == 0 {
+				fmt.Printf("fan: no reply from MCU within %v\n", ex2FanRPMReplyTimeout)
+				return nil
+			}
+			rpm, derr := mcu.EX2DecodeFanRPM(reply)
+			if derr != nil {
+				// derr's own text embeds the raw reply bytes - not
+				// printed here so -D stays the only way to see them.
+				fmt.Println("fan: couldn't decode an RPM value from the MCU's reply (run with -D to see the raw bytes)")
+				return nil
+			}
+			fmt.Printf("fan rpm = %d\n", rpm)
+			return nil
+		},
+	}, exitOK
 }
 
 func buildLEDAction(b board.Board, serialPath string, args []string) (*action, int) {
