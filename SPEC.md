@@ -537,8 +537,11 @@ display at all.
    header bytes are known (table dump above) but the handler that
    builds the frame from them was not independently decompiled the
    way EX4's was.
-3. **HD-bay blue LED channel** - possible SATA-register involvement,
-   not GPIO; see "LED" above.
+3. ~~HD-bay blue LED channel - possible SATA-register involvement~~ -
+   **resolved**: a direct register-page capture confirmed hd0/hd1
+   blue are plain GPIO bits (25/23) in the same `0xF1018000` page as
+   red, not a SATA-controller register at all - see "LED (EX2/EX4)"
+   above.
 4. ~~EX2's fan level-to-bitmask order~~ - **resolved**, see "Fan
    control" above (was wrong; confirmed and fixed via real-hardware
    RPM read-back).
