@@ -45,10 +45,24 @@ func Open(path string, baud int) (*Port, error) {
 		return nil, fmt.Errorf("mcu: open %s: %w", path, err)
 	}
 
+	// b must be OR'd into Cflag itself, not just Ispeed/Ospeed: TCSETS
+	// (unlike TCSETS2) uses the kernel's plain struct termios, whose
+	// C layout has no ispeed/ospeed fields at all - the baud rate is
+	// entirely encoded in c_cflag's CBAUD bits. unix.Termios's
+	// Ispeed/Ospeed fields exist in the Go struct but are silently
+	// ignored by a TCSETS ioctl, so setting only those (the original
+	// bug here) leaves the real baud rate at B0 (hang-up/0 baud) -
+	// confirmed via a live strace comparing this tool's own TCSETS
+	// call (c_cflag=B0|CS8|CREAD|CLOCAL) against the vendor mcu_ctl's
+	// (c_cflag=B19200|CS8|CREAD|CLOCAL) on real EX2U hardware. This,
+	// not the inter-byte pacing fixed earlier, was the actual cause of
+	// "frame sent with no I/O error, MCU never responds": the bytes
+	// went out at the wrong bit rate, so the MCU's UART never saw a
+	// valid frame, let alone a complete one.
 	t := unix.Termios{
 		Iflag:  0,
 		Oflag:  0,
-		Cflag:  unix.CS8 | unix.CREAD | unix.CLOCAL,
+		Cflag:  b | unix.CS8 | unix.CREAD | unix.CLOCAL,
 		Lflag:  0,
 		Ispeed: b,
 		Ospeed: b,

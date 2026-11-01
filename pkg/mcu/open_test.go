@@ -41,6 +41,47 @@ func TestOpen_ValidBaud_SendsOverWire(t *testing.T) {
 	}
 }
 
+// The real regression test for the actual root cause of the EX2U
+// hardware failure: Open set Ispeed/Ospeed but never OR'd the baud
+// constant into Cflag itself. TCSETS (unlike TCSETS2) uses the
+// kernel's plain struct termios, which has no ispeed/ospeed fields at
+// all - the baud rate lives entirely in c_cflag's CBAUD bits - so
+// that bug silently left every port at B0 (0 baud) regardless of the
+// baud argument. No PTY-based test can catch this: a pty has no bit
+// rate to get wrong, so every PTY test in this package passed both
+// before and after the bug was introduced and fixed. This test reads
+// the configured termios back with TCGETS and checks Cflag's CBAUD
+// bits directly - the same field a live strace of this tool on real
+// EX2U hardware showed as "B0|CS8|CREAD|CLOCAL" instead of the
+// vendor mcu_ctl's "B19200|CS8|CREAD|CLOCAL".
+func TestOpen_SetsRealBaudRateInCflag(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	cases := []struct {
+		baud int
+		want uint32
+	}{
+		{19200, unix.B19200},
+		{115200, unix.B115200},
+	}
+	for _, c := range cases {
+		p, err := Open(fake.SlavePath, c.baud)
+		if err != nil {
+			t.Fatalf("Open(..., %d): %v", c.baud, err)
+		}
+
+		got, err := unix.IoctlGetTermios(int(p.f.Fd()), unix.TCGETS)
+		if err != nil {
+			t.Fatalf("baud %d: IoctlGetTermios: %v", c.baud, err)
+		}
+
+		if got.Cflag&unix.CBAUD != c.want {
+			t.Errorf("baud %d: Cflag&CBAUD = %#x, want %#x (Cflag = %#x) - baud rate not actually set on the wire, only Ispeed/Ospeed (which TCSETS ignores)", c.baud, got.Cflag&unix.CBAUD, c.want, got.Cflag)
+		}
+		p.Close()
+	}
+}
+
 func TestOpen_UnsupportedBaud(t *testing.T) {
 	fake := fakemcu.New(t)
 	for _, baud := range []int{0, 9600, 38400, 57600, -1} {

@@ -68,6 +68,23 @@ against real hardware, not just statically).
   *bytes* and baud/framing (confirmed via the kernel driver
   end-to-end test); the pacing figure had silently drifted into an
   unconfirmed guess despite sitting right next to that claim.
+  **Update**: removing the pacing alone did not fix the real-hardware
+  symptom on retest - it was a second, independently real bug, not
+  the actual root cause. See `pkg/mcu/serial.go`'s `Open` for the
+  actual one: `TCSETS` (what this tool uses, matching the vendor
+  tool) encodes the baud rate entirely in `c_cflag`'s `CBAUD` bits,
+  not in separate `c_ispeed`/`c_ospeed` fields - `wd-control-tool`
+  was setting only the latter (ignored by `TCSETS`), leaving every
+  port at the kernel's default `B0` (0 baud) regardless of the
+  `baud` argument passed to `Open`. A live `strace -x` comparison on
+  real EX2U hardware caught it directly: this tool's own
+  `TCSETS` showed `c_cflag=B0|CS8|CREAD|CLOCAL`, the vendor
+  `mcu_ctl`'s showed `c_cflag=B19200|CS8|CREAD|CLOCAL`. Fixed by
+  OR'ing the baud constant into `Cflag` itself; regression-tested by
+  reading the configured termios back with `TCGETS` and checking
+  `Cflag&CBAUD` directly (`TestOpen_SetsRealBaudRateInCflag` -
+  deliberately not a PTY-based test, since a pty has no real bit
+  rate to get wrong).
 - No checksum.
 
 | Command | Bytes |

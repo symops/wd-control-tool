@@ -222,6 +222,33 @@ confirmed via a live `strace -tt` capture of the real tool (see
 SPEC.md's "EX2U protocol"); see `TestEX2U_FanPercent_HasNoDeliberateInterByteDelay`
 for the regression test this earned.
 
+That pacing fix, while real, did not actually fix the hardware
+symptom - a second real-hardware test after deploying it (binary
+hash confirmed identical) still showed no response, same debug
+output as before. The actual root cause, found the same way (a
+direct `strace -x` comparison of this tool's own `TCSETS` call
+against the vendor `mcu_ctl`'s): `pkg/mcu/serial.go`'s `Open` set
+`Ispeed`/`Ospeed` on the termios struct but never OR'd the baud
+constant into `Cflag` itself. `TCSETS` (the ioctl this tool uses,
+matching the vendor tool - as opposed to `TCSETS2`) operates on the
+kernel's plain `struct termios`, whose real C layout has no
+`ispeed`/`ospeed` fields at all; the baud rate lives entirely in
+`c_cflag`'s `CBAUD` bits. `unix.Termios`'s Go-side `Ispeed`/`Ospeed`
+fields are silently ignored by a `TCSETS` ioctl, so this tool's
+ports were all configured at the kernel's default `B0` (0 baud)
+regardless of the requested baud - bytes went out at the wrong bit
+rate, so the MCU's UART never saw a valid frame. The strace made
+this directly visible: this tool's own `TCSETS` showed
+`c_cflag=B0|CS8|CREAD|CLOCAL`; the vendor's showed
+`c_cflag=B19200|CS8|CREAD|CLOCAL`. No PTY-based test could ever
+have caught this (a pty has no bit rate to get wrong - every PTY
+test in this suite passed identically before and after both the bug
+and the fix). Fixed by OR'ing the baud constant into `Cflag`;
+regression-tested by reading the configured termios back with
+`TCGETS` and checking `Cflag&CBAUD` directly against the requested
+baud (`pkg/mcu/open_test.go`'s `TestOpen_SetsRealBaudRateInCflag`,
+confirmed to fail against the pre-fix code before being committed).
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.
