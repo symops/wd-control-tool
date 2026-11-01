@@ -3,6 +3,7 @@ package mcu
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,4 +144,57 @@ func FuzzEX2ULEDFrame_NeverPanics(f *testing.F) {
 			t.Fatalf("EX2ULEDFrame(%q) = % X, want exactly 7 bytes", state, frame)
 		}
 	})
+}
+
+// serial_test.go's TestPort_SendBytes_ConcurrentFramesNeverInterleave
+// proves sendBytes itself never interleaves two frames, but only
+// using raw, hand-built byte slices - never through the actual EX2U
+// methods a real caller would use. Confirm the same property holds
+// through the real call path: two goroutines repeatedly calling
+// LEDOn()/LEDOff() (distinguishable 7-byte frames, param byte 0x01
+// vs 0x00) on the same *Port - every 7-byte run on the wire must be
+// entirely one or the other, never a mix of both methods' bytes.
+func TestEX2U_LEDOnOff_ConcurrentCallsNeverInterleave(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2U(OpenFile(fake.Slave))
+
+	const rounds = 5 // EX2U's 100ms/byte pacing makes this slow; keep it short
+	var wg sync.WaitGroup
+	callErrs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := m.LEDOn(); err != nil {
+				callErrs <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := m.LEDOff(); err != nil {
+				callErrs <- err
+				return
+			}
+		}
+	}()
+
+	got := fake.ReadFrame(t, rounds*2*7, 10*time.Second)
+
+	wg.Wait()
+	close(callErrs)
+	for err := range callErrs {
+		t.Fatalf("LEDOn/LEDOff: %v", err)
+	}
+
+	on := []byte{0xFA, 0x03, 0x06, 0x01, 0x00, 0x00, 0xFB}
+	off := []byte{0xFA, 0x03, 0x06, 0x00, 0x00, 0x00, 0xFB}
+	for i := 0; i < len(got); i += 7 {
+		chunk := got[i : i+7]
+		if !bytes.Equal(chunk, on) && !bytes.Equal(chunk, off) {
+			t.Fatalf("byte run at offset %d is neither a clean LEDOn nor LEDOff frame (interleaved): % X", i, chunk)
+		}
+	}
 }
