@@ -89,18 +89,7 @@ func (m *EX2U) TempRaw() error { return m.send(0x03, 0x08, 0x00) }
 // came back even when decoding fails or a future reply shape differs
 // from the one captured so far.
 func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
-	if err := m.p.flushInput(); err != nil {
-		return nil, err
-	}
-	if err := m.TempRaw(); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, 64)
-	n, err := m.p.recvBytes(buf, timeout)
-	if err != nil {
-		return nil, err
-	}
-	return buf[:n], nil
+	return m.p.sendAndRecv(m.TempRaw, timeout)
 }
 
 // EX2UDecodeTempFahrenheit decodes a tmp_get reply (as returned by

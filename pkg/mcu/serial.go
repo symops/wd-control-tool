@@ -163,6 +163,27 @@ func (p *Port) flushInput() error {
 	return nil
 }
 
+// sendAndRecv flushes stale input, calls send (a port's own request-
+// frame sender, e.g. EX2.RequestFanStatus or EX2U.TempRaw), then
+// reads whatever bytes arrive within timeout - the exact sequence
+// EX2.FanStatusReply and EX2U.TempReply both need, factored out once
+// their bodies turned out byte-for-byte identical apart from which
+// send function to call.
+func (p *Port) sendAndRecv(send func() error, timeout time.Duration) ([]byte, error) {
+	if err := p.flushInput(); err != nil {
+		return nil, err
+	}
+	if err := send(); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 64)
+	n, err := p.recvBytes(buf, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
 // recvBytes reads whatever bytes arrive on the port within timeout.
 // Zero bytes with a nil error is a normal "nothing arrived in time"
 // outcome (the expected result for any reply this project hasn't

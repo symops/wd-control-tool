@@ -88,18 +88,7 @@ func EX2FanStatusRequestFrame() []byte { return buildFixedFrame(ex2FanStatusGet)
 // the decode, layered on top rather than built in, matching this
 // project's EX2U TempReply/EX2UDecodeTempCelsius split.
 func (m *EX2) FanStatusReply(timeout time.Duration) ([]byte, error) {
-	if err := m.p.flushInput(); err != nil {
-		return nil, err
-	}
-	if err := m.RequestFanStatus(); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, 64)
-	n, err := m.p.recvBytes(buf, timeout)
-	if err != nil {
-		return nil, err
-	}
-	return buf[:n], nil
+	return m.p.sendAndRecv(m.RequestFanStatus, timeout)
 }
 
 // EX2DecodeFanRPM decodes a FanStatusGet reply (as returned by
