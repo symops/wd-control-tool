@@ -1143,3 +1143,49 @@ func TestRun_AllFourActionTypesChained(t *testing.T) {
 		t.Errorf("out=%q, missing the fan frame bytes", out)
 	}
 }
+
+// TestRun_AllFourActionTypesChained (above) only ever ran under
+// -n/--dry-run, so it checks the TEXT -D prints, never bytes that
+// actually went anywhere - and every "chain of several actions"
+// test touching real I/O (e.g.
+// TestRun_MultipleActions_EarlierActionAlreadyAppliedBeforeLaterUnsupportedStopsChain)
+// stops after its first action specifically BECAUSE a later one
+// fails. Nothing confirmed that a chain of several VALID,
+// correctly-syntaxed actions actually applies every single one of
+// them for real, in the order given, with the right bytes each time
+// - the positive counterpart to
+// TestRun_ChainWithTrailingSyntaxError_AbortsBeforeAnyActionRuns.
+//
+// EX4's fan/display/rtc actions all go over the MCU/UART path, which
+// --serial lets a test redirect to a fakemcu pty; EX4's led action
+// goes over real /dev/mem instead (no CLI override exists for that -
+// see BUILDING.md on why no automated test opens a real /dev/mem),
+// so led is intentionally left out of this real-run chain.
+func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	code, _, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-f", "2", "-d", "Hi", "-r", "write"})
+	if code != exitOK {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+
+	fanFrame := fake.ReadFrame(t, 7, 2*time.Second)
+	wantFan := []byte{0xFA, 0x02, 0x00, 0x02, 0x00, 0x00, 0xFB}
+	if !bytes.Equal(fanFrame, wantFan) {
+		t.Errorf("1st frame (fan) = % X, want % X", fanFrame, wantFan)
+	}
+
+	dispFrame := fake.ReadFrame(t, 8, 2*time.Second) // FA 04 01 00 <LEN=2> 'H' 'i' FB
+	wantDisp := []byte{0xFA, 0x04, 0x01, 0x00, 0x02, 'H', 'i', 0xFB}
+	if !bytes.Equal(dispFrame, wantDisp) {
+		t.Errorf("2nd frame (display) = % X, want % X", dispFrame, wantDisp)
+	}
+
+	rtcFrame := fake.ReadFrame(t, 13, 2*time.Second) // WDateAndTime's fixed 13-byte frame
+	if rtcFrame[0] != 0xFA || rtcFrame[12] != 0xFB {
+		t.Errorf("3rd frame (rtc) = % X, want start/end markers FA/FB", rtcFrame)
+	}
+	if rtcFrame[1] != 0x01 || rtcFrame[2] != 0x00 || rtcFrame[3] != 0x04 || rtcFrame[4] != 0x07 {
+		t.Errorf("3rd frame (rtc) header = % X, want WDateAndTime's 01 00 04 07", rtcFrame[1:5])
+	}
+}
