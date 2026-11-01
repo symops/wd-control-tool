@@ -494,6 +494,23 @@ func TestRun_RTCWriteUnimplementedOnEX2(t *testing.T) {
 	}
 }
 
+// Only the dry-run case above was ever tested - confirms the REAL
+// (non-dry-run) exit code too: EX2's rtc write is "not implemented"
+// (a planErr, exitUsage=1), semantically distinct from "not supported
+// on this board" (exitUnsupported=2, e.g. EX2's display) even though
+// both end up unable to do anything - "not implemented" is this
+// project's own gap (a future RE pass could close it), while "not
+// supported" is a hardware fact that will never change.
+func TestRun_RTCWriteUnimplementedOnEX2_RealRun(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-b", "ex2", "-r", "write"})
+	if code != exitUsage {
+		t.Errorf("code=%d, want %d (exitUsage, distinct from exitUnsupported)", code, exitUsage)
+	}
+	if !strings.Contains(errOut, "not confirmed yet") {
+		t.Errorf("errOut=%q, want it to mention EX2's RTC gap", errOut)
+	}
+}
+
 // rtc.ErrEX2NotImplemented is exported specifically so a caller can
 // check for it with errors.Is - a library consumer of this project's
 // packages (not just this CLI) might reasonably do that, rather than
