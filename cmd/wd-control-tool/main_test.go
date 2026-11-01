@@ -75,6 +75,26 @@ func TestRun_HelpDocumentsBoardFlag(t *testing.T) {
 	}
 }
 
+// -h's own -t/--temp line previously described the OLD behavior
+// ("print the raw, undecoded MCU reply") well after that was changed
+// to print a decoded "Temperature: N C" line by default (raw bytes
+// moved behind -D) - found by actually reading `-h`'s output, not
+// just assuming it had been kept in sync with the real code. Pin the
+// current wording so a future behavior change without a help-text
+// update fails loudly here instead of silently drifting again.
+func TestRun_HelpDocumentsTempCommandCurrentBehavior(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-h"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "Temperature: N C") {
+		t.Errorf("-h output missing the actual -t/--temp wording (\"Temperature: N C\"): out=%q", out)
+	}
+	if strings.Contains(out, "undecoded MCU reply") {
+		t.Errorf("-h output still describes -t/--temp's OLD (pre-decode) behavior: out=%q", out)
+	}
+}
+
 func TestRun_HelpAndVersionMustBeAlone(t *testing.T) {
 	if code, out, _ := captureRun(t, []string{"-h"}); code != exitOK || !strings.Contains(out, "wd-control-tool -b BOARD") {
 		t.Errorf("-h: code=%d out=%q", code, out)

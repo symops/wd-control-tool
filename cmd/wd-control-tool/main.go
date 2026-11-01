@@ -345,7 +345,7 @@ chained in one command, run in the order given:
   -f, --fan rpm       read back the current fan RPM instead of setting a level - ex2 only
   -r, --rtc write      push the host's current time to the MCU RTC; no read-back - ex4 only
   -d, --display TEXT   write text to the front-panel LCD, taken verbatim - ex4 only
-  -t, --temp           request temperature and print the raw, undecoded MCU reply (see SPEC.md) - ex2u only, no arguments
+  -t, --temp           request and print the temperature as "Temperature: N C" (hardware-confirmed - see SPEC.md) - ex2u only, no arguments
 
 led's own arguments:
   ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking(blink)
