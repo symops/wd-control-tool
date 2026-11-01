@@ -89,6 +89,7 @@ fuzz:
 	go test ./pkg/led/ -run=NONE -fuzz=FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
 	go test ./pkg/fan/ -run=NONE -fuzz=FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
 	go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzParseArgs_NeverPanics -fuzztime=$(FUZZTIME)
+	go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzRun_NeverPanics -fuzztime=$(FUZZTIME)
 
 clean:
 	rm -f $(BINARY) $(BINARY)-armv7 $(BINARY)-armv5

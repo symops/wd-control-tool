@@ -111,7 +111,7 @@ Coverage, all without root or real hardware:
   `shutdownFamily`, `EX4DisplayFrame`'s LEN byte - see git history)
   all came from the same root cause: a value landing directly in a
   wire frame without being checked against the frame's own FA/FB
-  markers. `make fuzz` runs seven native Go fuzz tests, each clean
+  markers. `make fuzz` runs eight native Go fuzz tests, each clean
   for millions of executions:
   - `FuzzParse_NeverPanicsAndRoundTrips` (`pkg/board/board_test.go`)
     fuzzes `board.Parse` itself - the function that takes
@@ -136,6 +136,14 @@ Coverage, all without root or real hardware:
   - `FuzzParseArgs_NeverPanics` (`cmd/wd-control-tool/main_test.go`)
     checks the hand-rolled argv parser's own bounds-checked
     indexing/slicing never panics on malformed input.
+  - `FuzzRun_NeverPanics` (`cmd/wd-control-tool/main_test.go`) goes a
+    layer deeper than FuzzParseArgs: it calls `run()` itself (with
+    `-n` always forced, so a randomly-valid board+action combination
+    can never reach real hardware I/O), exercising
+    `buildLEDAction`/`buildFanAction`/`buildDisplayAction`/
+    `buildRTCAction` and the `parseZone`/`parseColor`/`parseState`/
+    `strconv.Atoi` calls they make - none of which any other fuzz
+    target touched.
   - `FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters`
     (`pkg/led/led_test.go`) and
     `FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters`

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -905,6 +906,77 @@ func FuzzParseArgs_NeverPanics(f *testing.F) {
 			}
 		}()
 		_, _ = parseArgs(args)
+	})
+}
+
+// devNullOnce lazily opens /dev/null once and reuses it across every
+// FuzzRun_NeverPanics iteration - unlike captureRun's real os.Pipe +
+// goroutine setup (built for inspecting output, which this fuzz
+// target doesn't need), a shared /dev/null sink keeps each iteration
+// cheap, which matters when the fuzzer wants to run many iterations
+// per second.
+var (
+	devNullOnce sync.Once
+	devNull     *os.File
+)
+
+func devNullFile(t *testing.T) *os.File {
+	devNullOnce.Do(func() {
+		f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatalf("open %s: %v", os.DevNull, err)
+		}
+		devNull = f
+	})
+	return devNull
+}
+
+// Every other fuzz target in this project exercises one function deep
+// in the call graph (a frame builder, a Plan, parseArgs' own
+// tokenizer); none exercised run() itself, so buildLEDAction/
+// buildFanAction/buildDisplayAction/buildRTCAction and the
+// parseZone/parseColor/parseState/strconv.Atoi calls they make were
+// never fuzzed at all - only ever driven by hand-picked test cases.
+// -n/--dry-run is forced (prepended, regardless of what the fuzzer
+// generates) specifically so a randomly-valid board+action
+// combination can never reach real hardware I/O, matching every
+// other test in this file (see captureRun's own doc comment) while
+// still exercising the full dispatch path for an otherwise-arbitrary
+// command line. Run with
+// `go test -fuzz=FuzzRun_NeverPanics ./cmd/wd-control-tool` to fuzz
+// beyond the seed corpus.
+func FuzzRun_NeverPanics(f *testing.F) {
+	for _, seed := range []string{
+		"-b ex4 -f 3",
+		"-b ex2u --led breathing",
+		"-b ex2 --led power blue on -f 1",
+		"-b ex4 --display hello",
+		"-b ex4 -r write",
+		"-b ex2u -f 50 -b ex2-ultra -f 25",
+		"-b ex2u -f 50 -b ex4 -f 2",
+		"-b ex2 -d hi",
+		"-b bogus -f 1",
+		"--led power blue on",
+		"-h",
+		"-v",
+		"",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, s string) {
+		args := append([]string{"-n"}, strings.Fields(s)...)
+
+		null := devNullFile(t)
+		origOut, origErr := os.Stdout, os.Stderr
+		os.Stdout, os.Stderr = null, null
+		defer func() {
+			os.Stdout, os.Stderr = origOut, origErr
+			if r := recover(); r != nil {
+				t.Fatalf("run(%q) panicked: %v", args, r)
+			}
+		}()
+		run(args)
 	})
 }
 
