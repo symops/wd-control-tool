@@ -17,6 +17,9 @@ import "time"
 //   group 8:  shutdown/reset family        -> buildByteWriteFrame
 //   group 9:  SysName (free text)          -> buildTextFrame
 //   group 24: FanControl (EX4) / WPWMValue (EX2) -> buildValueFrame
+//   (EX2's NewPWRLed, ex2.go, also uses buildValueFrame - a different
+//   dispatch group number, but the same "replace B6 with a runtime
+//   value" shape; hardware-confirmed, see SPEC.md's "LED (EX2/EX4)")
 
 const (
 	legacyStart = 0xFA
