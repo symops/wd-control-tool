@@ -11,10 +11,19 @@ import (
 // up_send_ctl or touches the UART; its 3 MCU-side FanStop/Half/Full
 // commands in pkg/mcu/ex2.go are a separate, apparently-unused-by-
 // fan_control control surface). Registers (base 0xf1000000, same
-// Kirkwood-class window LED uses at a different offset):
+// Kirkwood-class window LED uses):
 //
 //	reg1 = 0xf1018100, one-hot bits 0x40/0x100/0x800/0x1000/0x10000
 //	reg2 = 0xf1018140, one-hot bit  0x1
+//
+// reg2 is the EXACT SAME physical register pkg/led's hd-bay LED
+// scheme calls hdBayReg1 (confirmed via a real register-page scan
+// there) - not merely "the same window at a different offset" as an
+// earlier version of this comment claimed. The two subsystems share
+// this one register on entirely disjoint bits (fan: bit 0 only;
+// hd-bay LED: bits 20/21/23/25), which is why this never caused a
+// conflict - regio.Mem's Set/Clear writes are atomic read-modify-
+// write, so one subsystem's write never clobbers the other's bits.
 //
 // Clearing mask confirmed as 0x11940 (reg1) / 0x1 (reg2) - exactly
 // the union of the bits above, i.e. "stop" clears every fan bit.
