@@ -52,10 +52,9 @@ const (
 // byte example for EX2's write-side framing the way it does for
 // EX4's (see ex4.go's SetDateAndTime) - only the table's header bytes
 // are known. Guessing the payload layout from EX4's by analogy would
-// violate this project's own rule (see SPEC.md / memory
-// ex2u-mcu-uart-protocol-confirmed): never guess an MCU frame layout
-// without a live capture. rtc support for EX2 needs that capture
-// first.
+// violate this project's own rule (see SPEC.md): never guess an MCU
+// frame layout without a live capture. rtc support for EX2 needs
+// that capture first.
 type EX2 struct{ p *Port }
 
 func NewEX2(p *Port) *EX2 { return &EX2{p: p} }
