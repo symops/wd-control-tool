@@ -550,6 +550,57 @@ func TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted(t *testing.T) {
 	}
 }
 
+// Same property as TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted,
+// but for TWO chained rtc actions in one command: confirms each gets
+// its own independently-computed timestamp (buildRTCAction is called
+// once per pending action, so there's no risk of one action's `now`
+// leaking into the other's), and that both frames arrive on the wire
+// in order, each exactly matching ITS OWN debug-printed frame.
+func TestRun_RTCWrite_TwoChainedActions_EachSendsItsOwnDebugPrintedFrame(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	code, out, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-D", "-r", "write", "-r", "write"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	var wantFrames [][]byte
+	rest := out
+	for {
+		idx := strings.Index(rest, "frame=")
+		if idx == -1 {
+			break
+		}
+		hexPart := rest[idx+len("frame="):]
+		if nl := strings.IndexByte(hexPart, '\n'); nl != -1 {
+			hexPart = hexPart[:nl]
+		}
+		var frame []byte
+		for _, tok := range strings.Fields(hexPart) {
+			b, err := strconv.ParseUint(tok, 16, 8)
+			if err != nil {
+				t.Fatalf("parsing debug frame byte %q: %v", tok, err)
+			}
+			frame = append(frame, byte(b))
+		}
+		wantFrames = append(wantFrames, frame)
+		rest = rest[idx+len("frame="):]
+	}
+	if len(wantFrames) != 2 {
+		t.Fatalf("out=%q, want exactly 2 \"frame=\" debug lines, got %d", out, len(wantFrames))
+	}
+
+	for i, want := range wantFrames {
+		if len(want) != 13 {
+			t.Fatalf("frame %d = % X (%d bytes), want 13", i, want, len(want))
+		}
+		got := fake.ReadFrame(t, 13, 2*time.Second)
+		if !bytes.Equal(got, want) {
+			t.Errorf("frame %d: wire bytes = % X, want exactly its own debug-printed frame % X", i, got, want)
+		}
+	}
+}
+
 func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	// A path that cannot exist makes mcu.Open fail at os.OpenFile,
 	// before any real device is touched - a safe way to exercise the
