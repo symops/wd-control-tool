@@ -119,3 +119,20 @@ func TestE2E_ChainedActionsRunInOrder(t *testing.T) {
 		t.Errorf("out=%q, want the led action described before the fan action", out)
 	}
 }
+
+// The headline parsing bug found this session, confirmed through the
+// real compiled binary rather than just in-process via captureRun:
+// an action's own argument that happens to literally equal "-b" (a
+// display text of "-b" here) must be taken verbatim, not misdetected
+// as a second -b/--board flag. See
+// TestRun_ActionArgumentThatLooksLikeBoardFlag for the full set of
+// in-process cases this is a black-box sample of.
+func TestE2E_DisplayTextThatLooksLikeBoardFlag(t *testing.T) {
+	code, out, errOut := runE2E(t, "-b", "ex4", "-n", "-d", "-b")
+	if code != 0 {
+		t.Fatalf("exit code = %d, out=%q, err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, `display text "-b"`) {
+		t.Errorf("out=%q, want the display action's text to be the literal \"-b\"", out)
+	}
+}
