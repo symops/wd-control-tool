@@ -371,6 +371,21 @@ display at all.
    needed for this tool's current feature set).
 6. EX2U's `sys_reboot` byte sequence was never captured (see EX2U
    protocol table) - do not guess it if ever needed.
+7. **EX2U's actual tty node for uart1 is not confirmed** - `wd-
+   control-tool` defaults `--serial` to `/dev/ttyS1` (confirmed for
+   EX2/EX4 only). Confirmed wrong on at least one real EX2U unit:
+   `-b ex2u -f 50 -D` sent the correct frame (`FA 02 00 80 00 00
+   FB`, matching the fan_set_50 table entry exactly) with no I/O
+   error, but the fan never responded, while the vendor's own
+   `mcu_ctl fan_set_50` worked - meaning `/dev/ttyS1` opens and
+   accepts writes on that unit, it just isn't wired to the Welltrend
+   MCU. Per this project's own house rule, don't guess the real
+   path; find it the same way EX2U's protocol itself was originally
+   confirmed - a live capture of the real, working tool:
+   `strace -f -e trace=open,openat mcu_ctl fan_set_50 2>&1 | grep tty`
+   (or inspect `/proc/tty/driver/*`/`ls /dev/tty*` if `strace` isn't
+   available on the unit) - then pass the real path via `--serial`
+   until this default is updated.
 
 ## Author
 
