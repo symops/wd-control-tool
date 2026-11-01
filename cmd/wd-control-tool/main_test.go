@@ -624,6 +624,32 @@ func TestParseArgs_BoardAnywhereBeforeModeFlags(t *testing.T) {
 	}
 }
 
+// Regression test for a bug the -b-look-alike-argument fix itself
+// introduced (caught by actually running the command, not just
+// reading the diff): `-l on -b ex2u` is a perfectly ordinary command
+// - EX2U's single-token led state, then the board, in the order
+// "-b may appear anywhere" explicitly promises is fine (see
+// TestParseArgs_BoardAnywhereBeforeModeFlags) - but the fix's
+// conservative "assume -l takes 3 arguments when board isn't known
+// yet" guess, applied here, skipped 3 tokens ("on","-b","ex2u")
+// instead of EX2U's real 1 ("on"), eating the genuine -b/--board
+// flag along with it and failing with "-b/--board is required".
+// Fixed by adding a separate, non-authoritative hint pass (which
+// doesn't try to skip anything, the same way the original pre-fix
+// code worked) used ONLY to size this one skip correctly ahead of
+// time, while the real, skip-aware pass remains authoritative for
+// everything else - including the original bug this whole thing
+// started from, covered by TestRun_ActionArgumentThatLooksLikeBoardFlag.
+func TestRun_LedBeforeBoard_EX2U_SingleArgArity(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-l", "on", "-b", "ex2u", "-n"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "led on to EX2U") {
+		t.Errorf("out=%q, want the led action described", out)
+	}
+}
+
 func TestParseArgs_ModifiersAfterAction(t *testing.T) {
 	// Unlike the old -c-delimited grammar, -n/-D are ordinary flags
 	// now and may appear AFTER an action's fixed-arity arguments too.

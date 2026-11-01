@@ -124,26 +124,48 @@ func parseArgs(args []string) (*options, error) {
 		return nil
 	}
 
-	// This pass must skip over every OTHER mode flag's own
-	// fixed-arity argument(s) while scanning for -b/--board - found
-	// the hard way: `-b ex4 -d -b` (display text that happens to BE
-	// "-b") used to fail with "-b requires a value", because this
-	// pass didn't know the second "-b" token was --display's own
-	// argument, not a second board flag. -f/-d/-r/--serial always
-	// take exactly 1 argument regardless of board, so those are
-	// always skipped correctly here. -l/--led's arity depends on
-	// board (1 on EX2U, 3 otherwise), which creates a genuine
-	// chicken-and-egg case if -l appears before any -b in the
-	// command (board isn't known yet at that point in this very
-	// scan): this conservatively assumes the larger, EX2/EX4 shape
-	// (3) when board isn't known yet, since under-skipping (the
-	// original bug) is far more likely to misfire in practice than
-	// over-skipping a smaller EX2U action's trailing token in the
-	// rare case this guess turns out wrong - and either way, the
-	// second (fully board-aware, authoritative) pass below does the
-	// real arity-aware walk and builds the actual action list, so
-	// this pass only ever affects which tokens look like -b/--board
-	// here, never what actually gets executed.
+	// hintBoard is a quick, best-effort, NEVER-ERRORING scan - the
+	// same shape this whole pre-pass used to be before the fix below
+	// - used only to resolve -l/--led's board-dependent arity (1 on
+	// EX2U, 3 otherwise) ahead of time, for the one case that matters:
+	// -l appearing before any REAL -b/--board in the command, with
+	// nothing else yet known about which board it'll turn out to be.
+	// It is not authoritative (it can't be - this chicken-and-egg case
+	// is exactly why the real pass below exists) and its own mistakes
+	// (e.g. picking up a stray "-b"-looking value from another
+	// action's own argument) are harmless: it is consulted ONLY as a
+	// last-resort hint, and only to size one skip, never to set
+	// opts.board/opts.boardValue themselves.
+	var hintBoard board.Board
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if (a == "-b" || a == "--board") && i+1 < len(args) {
+			if b, err := board.Parse(args[i+1]); err == nil {
+				hintBoard = b
+			}
+			i++
+		} else if strings.HasPrefix(a, "--board=") {
+			if b, err := board.Parse(strings.TrimPrefix(a, "--board=")); err == nil {
+				hintBoard = b
+			}
+		}
+	}
+
+	// The real, authoritative -b/--board scan. Must skip over every
+	// OTHER mode flag's own fixed-arity argument(s) while doing so -
+	// found the hard way: `-b ex4 -d -b` (display text that happens to
+	// BE "-b") used to fail with "-b requires a value", because an
+	// earlier version of this pass didn't know the second "-b" token
+	// was --display's own argument, not a second board flag.
+	// -f/-d/-r/--serial always take exactly 1 argument regardless of
+	// board, so those are always skipped correctly here. -l/--led's
+	// arity is the one genuinely ambiguous case if board isn't known
+	// yet AT THIS POINT in this very scan (i.e. -l appears before any
+	// real -b) - that's exactly what hintBoard above is for; once a
+	// real -b/--board has actually been seen earlier in THIS scan,
+	// opts.boardValue (not the hint) is authoritative and used
+	// instead, the same way order-independence already works for
+	// every other purpose in this parser.
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -162,8 +184,12 @@ func parseArgs(args []string) (*options, error) {
 		case a == "-f" || a == "--fan" || a == "-d" || a == "--display" || a == "-r" || a == "--rtc" || a == "--serial":
 			i++ // skip this flag's own single argument, whatever it looks like
 		case a == "-l" || a == "--led":
+			b := opts.boardValue
+			if opts.board == "" {
+				b = hintBoard
+			}
 			n := 3
-			if opts.boardValue == board.EX2U {
+			if b == board.EX2U {
 				n = 1
 			}
 			i += n
