@@ -2,8 +2,10 @@ package mcu
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -111,4 +113,47 @@ func (p *Port) sendBytes(b []byte, pace func()) error {
 		}
 	}
 	return nil
+}
+
+// recvBytes reads whatever bytes arrive on the port within timeout.
+// Zero bytes with a nil error is a normal "nothing arrived in time"
+// outcome (the expected result for any reply this project hasn't
+// decoded yet - see EX2U.TempReply), not a failure; a non-nil error
+// means the read itself failed.
+//
+// Open configures VMIN=1/VTIME=0, so the underlying Read blocks
+// until at least one byte is available - there is no kernel-level
+// per-read timeout to lean on. (*os.File).SetReadDeadline was ruled
+// out for this exact reason on a pty master in this project before
+// (see test/fakemcu's readExactly) and a real tty fd gives no
+// stronger guarantee, so the same goroutine+select pattern is used
+// here: the Read runs in its own goroutine and the timeout is
+// enforced with select/time.After regardless of whether the fd
+// honors a deadline.
+//
+// A timeout leaves that goroutine blocked on Read past this call's
+// return - harmless for this tool's one-action-per-process CLI usage
+// (the process exits right after run() returns, taking the goroutine
+// with it), but calling recvBytes again on the same Port before an
+// earlier timed-out Read has actually returned risks two concurrent
+// Reads racing for the same incoming bytes.
+func (p *Port) recvBytes(buf []byte, timeout time.Duration) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := p.f.Read(buf)
+		ch <- result{n, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil && r.err != io.EOF {
+			return r.n, fmt.Errorf("mcu: read: %w", r.err)
+		}
+		return r.n, nil
+	case <-time.After(timeout):
+		return 0, nil
+	}
 }

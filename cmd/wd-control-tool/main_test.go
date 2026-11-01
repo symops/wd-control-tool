@@ -82,7 +82,7 @@ func TestRun_HelpAndVersionMustBeAlone(t *testing.T) {
 	if code, out, _ := captureRun(t, []string{"--help"}); code != exitOK || !strings.Contains(out, "wd-control-tool -b BOARD") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
-	if code, out, _ := captureRun(t, []string{"-v"}); code != exitOK || !strings.Contains(out, "1.0.0") || !strings.Contains(out, "symops@gmail.com") {
+	if code, out, _ := captureRun(t, []string{"-v"}); code != exitOK || !strings.Contains(out, "1.0") || !strings.Contains(out, "symops@gmail.com") {
 		t.Errorf("-v: code=%d out=%q", code, out)
 	}
 	if code, _, errOut := captureRun(t, []string{"-h", "-v"}); code != exitUsage || !strings.Contains(errOut, "alone") {
@@ -688,6 +688,117 @@ func TestRun_RealRun_EX2U_FanThenLed_BothSucceed(t *testing.T) {
 	}
 }
 
+func TestRun_DryRun_EX2UTemp(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-t"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "FA 03 08 00 00 00 FB") {
+		t.Errorf("out=%q, want the tmp_get request frame", out)
+	}
+	if !strings.Contains(out, "would request temperature") {
+		t.Errorf("out=%q, missing the dry-run description line", out)
+	}
+}
+
+func TestRun_Temp_UnsupportedOnOtherBoards(t *testing.T) {
+	for _, b := range []string{"ex2", "ex4"} {
+		code, _, errOut := captureRun(t, []string{"-b", b, "-t"})
+		if code != exitUnsupported {
+			t.Errorf("board %s: code=%d, want %d; err=%q", b, code, exitUnsupported, errOut)
+		}
+		if !strings.Contains(errOut, "temp is not supported") {
+			t.Errorf("board %s: errOut=%q", b, errOut)
+		}
+	}
+}
+
+// Drives buildTempAction's real apply() directly (not through
+// captureRun/run()) so the fake MCU's reply can be written WHILE
+// apply() is blocked waiting for it - captureRun calls run()
+// synchronously in the calling goroutine, so a test needing to
+// interleave fakemcu I/O with the call under test can't use it from
+// a background goroutine without calling *testing.T methods there,
+// which Go's testing package disallows (FailNow/Fatal must run on
+// the test's own goroutine). Running a.apply() (no *testing.T calls
+// inside it) in the background goroutine instead, with the fakemcu
+// interaction kept on the main test goroutine, avoids that entirely.
+func TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildTempAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the tmp_get request
+	if _, err := fake.Master.Write([]byte{0x11, 0x22, 0x33}); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "11 22 33") {
+		t.Errorf("stdout=%q, want the raw reply bytes printed", out)
+	}
+}
+
+// Mirrors TestRun_RealRun_EX2UTemp_PrintsRawReplyBytes but for the
+// outcome every real capture of this command has actually shown so
+// far: nothing comes back. Confirms apply() reports that plainly
+// (and still returns a nil error - a timeout here is expected, not a
+// failure) rather than hanging past ex2uTempReplyTimeout.
+func TestRun_RealRun_EX2UTemp_NoReplyPrintsNoReplyMessage(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildTempAction(board.EX2U, fake.SlavePath, nil)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildTempAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the request, send nothing back
+
+	if err := <-applyDone; err != nil { // blocks ~ex2uTempReplyTimeout
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "no reply") {
+		t.Errorf("stdout=%q, want a \"no reply\" message", out)
+	}
+}
+
 func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	// A path that cannot exist makes mcu.Open fail at os.OpenFile,
 	// before any real device is touched - a safe way to exercise the
@@ -1058,6 +1169,7 @@ func TestModeNameFor(t *testing.T) {
 		"-f": "fan", "--fan": "fan",
 		"-r": "rtc", "--rtc": "rtc",
 		"-d": "display", "--display": "display",
+		"-t": "temp", "--temp": "temp",
 		"-x": "", "--unknown": "", "": "",
 	}
 	for flag, want := range cases {
@@ -1079,6 +1191,7 @@ func TestArityFor(t *testing.T) {
 		{"led", board.EX2U, 1},
 		{"led", board.EX2, 3},
 		{"led", board.EX4, 3},
+		{"temp", board.EX2U, 0},
 	}
 	for _, c := range cases {
 		if got := arityFor(c.mode, c.b); got != c.want {
@@ -1090,7 +1203,7 @@ func TestArityFor(t *testing.T) {
 // arityFor's default case (return 0) is unreachable-in-practice the
 // same way buildAction's mode panic and buildFanAction/
 // buildLEDAction's unsupported-board branches are - modeNameFor only
-// ever returns "fan"/"led"/"display"/"rtc" (or ""), and arityFor is
+// ever returns "fan"/"led"/"display"/"rtc"/"temp" (or ""), and arityFor is
 // only ever called when that's non-empty. Closes the matching gap
 // for arityFor's own defensive branch, same as those three.
 func TestArityFor_UnknownModeReturnsZero(t *testing.T) {
@@ -1101,7 +1214,7 @@ func TestArityFor_UnknownModeReturnsZero(t *testing.T) {
 
 // buildAction's default case is an unreachable-in-practice panic:
 // parseArgs only ever calls it with a mode string that came from
-// modeNameFor, which only ever returns "fan"/"led"/"display"/"rtc"
+// modeNameFor, which only ever returns "fan"/"led"/"display"/"rtc"/"temp"
 // (or ""), so every real caller already has a valid mode by
 // construction. "Unreachable in practice" isn't the same as
 // "unreachable in fact" - if a future edit to parseArgs/modeNameFor

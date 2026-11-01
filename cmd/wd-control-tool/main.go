@@ -29,7 +29,7 @@ const (
 	exitHardwareIO  = 3
 )
 
-const version = "1.0.0"
+const version = "1.0"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -38,7 +38,7 @@ func main() {
 // pendingAction is one <mode flag> + its own fixed-arity arguments,
 // in the order it appeared on the command line.
 type pendingAction struct {
-	mode string // "led", "fan", "rtc", "display"
+	mode string // "led", "fan", "rtc", "display", "temp"
 	args []string
 }
 
@@ -64,6 +64,8 @@ func modeNameFor(flag string) string {
 		return "rtc"
 	case "-d", "--display":
 		return "display"
+	case "-t", "--temp":
+		return "temp"
 	default:
 		return ""
 	}
@@ -74,7 +76,8 @@ func modeNameFor(flag string) string {
 // they look like (so e.g. a display text starting with "-" is never
 // mistaken for a flag). led's arity depends on the board: EX2U's
 // status LED takes one STATE word, EX2/EX4's zone/color/state scheme
-// takes three.
+// takes three. temp takes no arguments at all - it just requests and
+// prints whatever raw reply comes back (see buildTempAction).
 func arityFor(mode string, b board.Board) int {
 	switch mode {
 	case "fan", "display", "rtc":
@@ -84,6 +87,8 @@ func arityFor(mode string, b board.Board) int {
 			return 1
 		}
 		return 3
+	case "temp":
+		return 0
 	default:
 		return 0
 	}
@@ -300,7 +305,7 @@ func run(args []string) int {
 	b := opts.boardValue
 
 	if len(opts.actions) == 0 {
-		fmt.Fprintln(os.Stderr, "wd-control-tool: at least one of -l/--led, -f/--fan, -r/--rtc, -d/--display is required")
+		fmt.Fprintln(os.Stderr, "wd-control-tool: at least one of -l/--led, -f/--fan, -r/--rtc, -d/--display, -t/--temp is required")
 		printUsage(os.Stderr)
 		return exitUsage
 	}
@@ -339,6 +344,7 @@ chained in one command, run in the order given:
   -f, --fan LEVEL     board-native units, NOT 0-100 - see README.md - ex2u, ex2, ex4
   -r, --rtc write      push the host's current time to the MCU RTC; no read-back - ex4 only
   -d, --display TEXT   write text to the front-panel LCD, taken verbatim - ex4 only
+  -t, --temp           request temperature and print the raw, undecoded MCU reply (see SPEC.md) - ex2u only, no arguments
 
 led's own arguments:
   ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking(blink)
@@ -347,7 +353,7 @@ led's own arguments:
 Modifiers (may appear anywhere, apply to every action in the command):
   -n, --dry-run   print what would be done, touch no hardware; exits 0 even if the real run would fail
   -D, --debug     print extra diagnostics (frame bytes / register addresses) alongside normal output; changes nothing about what is done
-  --serial PATH   MCU serial device (default /dev/ttyS1 - confirmed on EX2/EX4; EX2U's uart1 tty node is NOT yet confirmed)
+  --serial PATH   MCU serial device (default /dev/ttyS1 - confirmed on real hardware for EX2/EX4 and EX2U)
 
 Examples:
   wd-control-tool -b ex2 -f 3
@@ -415,6 +421,8 @@ func buildAction(b board.Board, mode, serialPath string, args []string) (*action
 		return buildDisplayAction(b, serialPath, args)
 	case "rtc":
 		return buildRTCAction(b, serialPath, args)
+	case "temp":
+		return buildTempAction(b, serialPath, args)
 	default:
 		panic("unreachable mode " + mode)
 	}
@@ -611,6 +619,47 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 	default:
 		return unsupportedErr("rtc is not supported on board %v", b)
 	}
+}
+
+// ex2uTempReplyTimeout is how long buildTempAction waits for a reply
+// after sending the tmp_get request before reporting "no reply" -
+// generous relative to the EX2U UART's own byte timing (a handful of
+// milliseconds per frame, per SPEC.md), but no real reply has ever
+// been captured to calibrate against, so this is deliberately
+// conservative rather than tuned to an assumption.
+const ex2uTempReplyTimeout = 2 * time.Second
+
+// buildTempAction sends EX2U's tmp_get request and prints whatever
+// raw bytes come back, unconverted - see mcu.EX2U.TempReply's doc
+// comment for why this doesn't attempt a Celsius/Fahrenheit decode.
+// EX2U-only: no temp command is documented for EX2/EX4's legacy
+// protocol (see SPEC.md's command tables).
+func buildTempAction(b board.Board, serialPath string, args []string) (*action, int) {
+	if b != board.EX2U {
+		return unsupportedErr("temp is not supported on board %v", b)
+	}
+	frame := mcu.EX2UTempRequestFrame()
+	return &action{
+		describe:   fmt.Sprintf("request temperature from EX2U MCU (%s) and print the raw reply (undecoded - see SPEC.md)", serialPath),
+		debugLines: frameDebugLines(nil, frame, serialPath, 19200),
+		apply: func() error {
+			p, err := mcu.Open(serialPath, 19200)
+			if err != nil {
+				return err
+			}
+			defer p.Close()
+			reply, err := mcu.NewEX2U(p).TempReply(ex2uTempReplyTimeout)
+			if err != nil {
+				return err
+			}
+			if len(reply) == 0 {
+				fmt.Printf("temp: no reply from MCU within %v (reply framing is undecoded - see SPEC.md's Unresolved #1)\n", ex2uTempReplyTimeout)
+				return nil
+			}
+			fmt.Printf("temp: raw reply (undecoded - see SPEC.md's Unresolved #1): % X\n", reply)
+			return nil
+		},
+	}, exitOK
 }
 
 func frameDebugLines(planErr error, frame []byte, serialPath string, baud int) []string {

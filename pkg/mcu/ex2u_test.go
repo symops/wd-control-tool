@@ -55,6 +55,80 @@ func TestEX2UFrames(t *testing.T) {
 	}
 }
 
+// TempReply's real reply framing is unknown (see SPEC.md's Unresolved
+// #1) - this only pins the one thing that IS known: the request
+// frame sent is tmp_get's fixed bytes, and whatever the other end of
+// the wire writes back comes back out verbatim, undecoded. The fake
+// MCU here stands in for a real one that might send literally
+// anything; this test is not a claim about what a real EX2U actually
+// replies with.
+func TestEX2U_TempReply_ReturnsWhateverRawBytesArrive(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2U(OpenFile(fake.Slave))
+
+	wantReply := []byte{0x11, 0x22, 0x33}
+	done := make(chan struct {
+		got []byte
+		err error
+	}, 1)
+	go func() {
+		got, err := m.TempReply(3 * time.Second)
+		done <- struct {
+			got []byte
+			err error
+		}{got, err}
+	}()
+
+	gotReq := fake.ReadFrame(t, 7, 3*time.Second)
+	wantReq := EX2UTempRequestFrame()
+	if !bytes.Equal(gotReq, wantReq) {
+		t.Fatalf("request frame = % X, want % X", gotReq, wantReq)
+	}
+
+	if _, err := fake.Master.Write(wantReply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("TempReply: %v", r.err)
+	}
+	if !bytes.Equal(r.got, wantReply) {
+		t.Errorf("TempReply = % X, want % X", r.got, wantReply)
+	}
+}
+
+// If the MCU never replies (exactly what every real capture of this
+// command has shown so far - see SPEC.md), TempReply must return an
+// empty, error-free result rather than hanging or failing: a timeout
+// here is the NORMAL outcome today, not a bug.
+func TestEX2U_TempReply_NoReplyWithinTimeoutReturnsEmptyNoError(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2U(OpenFile(fake.Slave))
+
+	done := make(chan struct {
+		got []byte
+		err error
+	}, 1)
+	go func() {
+		got, err := m.TempReply(200 * time.Millisecond)
+		done <- struct {
+			got []byte
+			err error
+		}{got, err}
+	}()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the request; send nothing back
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("TempReply: want nil error on timeout, got %v", r.err)
+	}
+	if len(r.got) != 0 {
+		t.Errorf("TempReply = % X, want empty (no reply arrived)", r.got)
+	}
+}
+
 func TestEX2UFanPercent_RejectsUnsupported(t *testing.T) {
 	m := &EX2U{} // p is unused by the error path
 	for _, bad := range []int{1, 10, 33, 50 + 1, 101, -1} {

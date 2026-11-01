@@ -388,6 +388,10 @@ display at all.
    either a full decompile of `up_read_daemon`'s `RS232_Read` parsing
    loop, or (more reliably, per this project's own house rule - see
    EX2U's protocol history) a live UART capture of a real reply.
+   `wd-control-tool -b ex2u -t` exists for exactly this: it sends
+   `tmp_get`'s request and prints whatever raw bytes come back,
+   undecoded - run it on real EX2U hardware and feed the output back
+   into this spec once something other than "no reply" shows up.
 2. **EX2's `WDateAndTime`/`RDateAndTime` write-side frame layout** -
    header bytes are known (table dump above) but the handler that
    builds the frame from them was not independently decompiled the

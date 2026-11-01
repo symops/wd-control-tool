@@ -1,5 +1,7 @@
 package mcu
 
+import "time"
+
 // EX2U's Welltrend 6703F-OG240WT MCU protocol, on uart1, 19200 8N1.
 // Hardware-confirmed (captured via strace on real hardware, and the
 // shutdown command end-to-end tested against the kernel driver that
@@ -67,11 +69,40 @@ func (m *EX2U) SysSilent() error { return m.send(0x03, 0x03, 0x00) }
 // anything that isn't an actual, deliberate shutdown path.
 func (m *EX2U) SysShutdown() error { return m.send(0x03, 0x03, 0x01) }
 
+// EX2UTempRequestFrame builds the fixed request frame both tmp_get_f
+// and tmp_get_c send (unit conversion, if any, is client-side - see
+// SPEC.md's command table) - the pure builder -n/--dry-run and
+// -D/--debug use, matching every other EX2U command.
+func EX2UTempRequestFrame() []byte { return ex2uFrame(0x03, 0x08, 0x00) }
+
 // TempRaw sends the one wire command both tmp_get_f and tmp_get_c use;
 // unit conversion (if any) is the caller's job, not the protocol's -
 // this tool has never captured a response frame for this command, so
 // for now it only sends the request (see SPEC.md "unresolved").
 func (m *EX2U) TempRaw() error { return m.send(0x03, 0x08, 0x00) }
+
+// TempReply sends the tmp_get request and returns whatever raw bytes
+// the MCU sends back within timeout - possibly none. This
+// deliberately does NOT decode the result into a Celsius/Fahrenheit
+// value: the reply frame's byte layout has never been captured (see
+// SPEC.md's Unresolved #1), and guessing one here would repeat
+// exactly the mistake this project's own house rule exists to avoid
+// - the EX2U inter-byte-pacing bug and the serial baud-rate bug were
+// both found only by comparing a live strace against the real,
+// working vendor tool, never by assuming a plausible-looking value.
+// Once a real reply has been captured and its layout is understood,
+// add the decode on top of this, not instead of it.
+func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
+	if err := m.TempRaw(); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 64)
+	n, err := m.p.recvBytes(buf, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
+}
 
 // EX2ULEDStates lists the CLI vocabulary EX2ULEDFrame/the `-l` command
 // accept, in a stable order - used both for parsing and for printing

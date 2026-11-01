@@ -68,9 +68,10 @@ wd-control-tool -b ex4 -n -D --led power blue on       # preview the exact bytes
   what is done.
 - `-h`, `--help` / `-v`, `--version` - must be used alone.
 - `--serial PATH` overrides the MCU UART device (default
-  `/dev/ttyS1`, confirmed for EX2/EX4; **EX2U's actual tty node is
-  not yet confirmed** - override if `/dev/ttyS1` is wrong on that
-  board).
+  `/dev/ttyS1`, confirmed on real hardware for EX2/EX4 and, since
+  fixing the serial baud-rate bug, for EX2U too - a live `-f 50`
+  fan-control test on real EX2U hardware confirmed the fan actually
+  responds through this default path).
 
 On a real (non-dry-run) run with multiple actions, the first one that
 fails stops the rest - later actions in the same command never run.
@@ -84,6 +85,7 @@ fails stops the rest - later actions in the same command never run.
 | `-l`, `--led` | ex2u | `STATE` | states: `on`, `off`, `blinking` (or `blink`), `breathing` (or `breathe`) - EX2U's single status LED, not a zone/color scheme. |
 | `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated or paginated at the LCD's own 16-char width - see SPEC.md. Taken verbatim, even if it looks like a flag (e.g. starts with `-`). Max 255 bytes (the wire format's own LEN field is one byte wide), and may not contain a literal 0xFA/0xFB byte or be exactly 250/251 bytes long (the wire protocol's own start/end markers - see SPEC.md); any of these is rejected with an error, not silently sent. |
 | `-r`, `--rtc` | ex4 | `write` | Pushes the host's current time to the MCU RTC. **EX2 not yet implemented** (frame layout unconfirmed); **no board supports reading the RTC back** yet (see SPEC.md). |
+| `-t`, `--temp` | ex2u | (none) | Sends the `tmp_get` request and prints whatever raw bytes the MCU replies with, **undecoded** - no real reply has ever been captured, so this does not attempt a Celsius/Fahrenheit conversion (see SPEC.md's Unresolved #1). Prints "no reply" rather than failing if nothing arrives within 2s - that is the expected outcome today, not an error. |
 
 No generic "all boards" fallback exists anywhere: every command's
 actual mechanism differs per board (see SPEC.md), and this tool
