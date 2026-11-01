@@ -228,3 +228,50 @@ func TestMem_SetClearBits_ConcurrentDistinctBitsAllSurvive(t *testing.T) {
 		t.Errorf("after %d goroutines each setting one distinct bit: got 0x%08x, want 0xFFFFFFFF (missing bits: 0x%08x - SetClearBits' read-modify-write wasn't atomic)", n, got, ^got)
 	}
 }
+
+// Different property from TestMem_ConcurrentAccessIsRaceFree (which
+// only checks `go test -race` sees no unsynchronized memory access):
+// WriteReg32 writes its 4 bytes one field assignment at a time
+// (data[off], data[off+1], ...), so if its lock were ever held for
+// less than the whole operation, a concurrent writer to the SAME
+// address could observe (or produce) a "torn" value - some bytes
+// from one writer's value, some from another's - even though -race
+// might not flag byte-level data[i] = x assignments to the same mmap
+// region as a race the way it would a Go-level variable (this is
+// physical memory through a byte slice, not race-detector-
+// instrumented Go memory in the usual sense for every access
+// pattern). Confirm directly: many goroutines repeatedly write their
+// own distinctive, internally-uniform 4-byte pattern (0x01010101,
+// 0x02020202, ...) to the same address; the final value read back
+// must be EXACTLY one writer's clean pattern, never a mix.
+func TestMem_WriteReg32_ConcurrentWritesNeverTorn(t *testing.T) {
+	mem := newFakeMem(t, 1<<20)
+	const addr = 0x6000
+	const writers = 9
+
+	valid := make(map[uint32]bool, writers)
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for i := 1; i <= writers; i++ {
+		v := uint32(i) * 0x01010101
+		valid[v] = true
+		go func(v uint32) {
+			defer wg.Done()
+			for round := 0; round < 200; round++ {
+				if err := mem.WriteReg32(addr, v); err != nil {
+					t.Errorf("WriteReg32: %v", err)
+					return
+				}
+			}
+		}(v)
+	}
+	wg.Wait()
+
+	got, err := mem.ReadReg32(addr)
+	if err != nil {
+		t.Fatalf("ReadReg32: %v", err)
+	}
+	if !valid[got] {
+		t.Errorf("after concurrent writes: got 0x%08x, want one of the %d clean writer patterns - this value is torn (mixed bytes from more than one writer)", got, writers)
+	}
+}
