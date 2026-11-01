@@ -275,3 +275,70 @@ func TestMem_WriteReg32_ConcurrentWritesNeverTorn(t *testing.T) {
 		t.Errorf("after concurrent writes: got 0x%08x, want one of the %d clean writer patterns - this value is torn (mixed bytes from more than one writer)", got, writers)
 	}
 }
+
+// Same property, but for a reader running DURING active writes, not
+// just the one read after everything settles - both ReadReg32 and
+// WriteReg32 take the same mutex, so a reader should never be able
+// to observe a torn value mid-write either; this is the read-side
+// counterpart to TestMem_WriteReg32_ConcurrentWritesNeverTorn.
+func TestMem_ReadReg32_NeverObservesATornValueDuringConcurrentWrites(t *testing.T) {
+	mem := newFakeMem(t, 1<<20)
+	const addr = 0x7000
+	const writers = 9
+
+	valid := make(map[uint32]bool, writers)
+	for i := 1; i <= writers; i++ {
+		valid[uint32(i)*0x01010101] = true
+	}
+	if err := mem.WriteReg32(addr, 0x01010101); err != nil { // seed a valid starting value
+		t.Fatalf("seed WriteReg32: %v", err)
+	}
+
+	// Writers run until told to stop (via stopWriters, closed only
+	// AFTER every reader below has finished) - started first so
+	// they're already actively writing once the readers begin.
+	stopWriters := make(chan struct{})
+	var writersWG sync.WaitGroup
+	writersWG.Add(writers)
+	for i := 1; i <= writers; i++ {
+		v := uint32(i) * 0x01010101
+		go func(v uint32) {
+			defer writersWG.Done()
+			for {
+				select {
+				case <-stopWriters:
+					return
+				default:
+					if err := mem.WriteReg32(addr, v); err != nil {
+						t.Errorf("WriteReg32: %v", err)
+						return
+					}
+				}
+			}
+		}(v)
+	}
+
+	const readers = 4
+	var readersWG sync.WaitGroup
+	readersWG.Add(readers)
+	for r := 0; r < readers; r++ {
+		go func() {
+			defer readersWG.Done()
+			for i := 0; i < 500; i++ {
+				got, err := mem.ReadReg32(addr)
+				if err != nil {
+					t.Errorf("ReadReg32: %v", err)
+					return
+				}
+				if !valid[got] {
+					t.Errorf("ReadReg32 observed a torn value 0x%08x (not one of the %d clean writer patterns) while writes were in progress", got, writers)
+					return
+				}
+			}
+		}()
+	}
+
+	readersWG.Wait()   // readers run their fixed iterations WHILE writers are still actively writing
+	close(stopWriters) // only now tell the writers to stop
+	writersWG.Wait()
+}
