@@ -601,6 +601,32 @@ func TestRun_RTCWrite_TwoChainedActions_EachSendsItsOwnDebugPrintedFrame(t *test
 	}
 }
 
+// Unlike rtc's fixed 13-byte frame or led's fixed 7-byte frame,
+// display frames are VARIABLE length (LEN byte + text). Confirms two
+// chained display actions with DIFFERENT-length texts each produce
+// exactly the right number of bytes on the wire, read back in order
+// with no byte-boundary confusion between the two frames.
+func TestRun_RealRun_TwoChainedDisplayActions_DifferentLengths(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	code, _, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-d", "Hi", "-d", "Hello"})
+	if code != exitOK {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+
+	frame1 := fake.ReadFrame(t, 8, 2*time.Second) // FA 04 01 00 02 'H' 'i' FB
+	want1 := []byte{0xFA, 0x04, 0x01, 0x00, 0x02, 'H', 'i', 0xFB}
+	if !bytes.Equal(frame1, want1) {
+		t.Errorf("1st frame = % X, want % X", frame1, want1)
+	}
+
+	frame2 := fake.ReadFrame(t, 11, 2*time.Second) // FA 04 01 00 05 'H' 'e' 'l' 'l' 'o' FB
+	want2 := []byte{0xFA, 0x04, 0x01, 0x00, 0x05, 'H', 'e', 'l', 'l', 'o', 0xFB}
+	if !bytes.Equal(frame2, want2) {
+		t.Errorf("2nd frame = % X, want % X", frame2, want2)
+	}
+}
+
 func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	// A path that cannot exist makes mcu.Open fail at os.OpenFile,
 	// before any real device is touched - a safe way to exercise the
