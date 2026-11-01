@@ -480,6 +480,22 @@ func TestRun_LEDAllZonesColorsStates(t *testing.T) {
 	}
 }
 
+// EX2U's own led vocabulary (a single STATE argument, not EX4's
+// zone/color/state scheme) has its own alias pairs - "blinking"/
+// "blink" and "breathing"/"breathe" - fully exercised at the
+// mcu.EX2ULEDFrame level (pkg/mcu/ex2u_test.go), but never all
+// together through the actual CLI dispatch path
+// (buildLEDAction -> run()). Close that the same way
+// TestRun_LEDAllZonesColorsStates closes it for EX4.
+func TestRun_LEDAllStates_EX2U(t *testing.T) {
+	for _, state := range []string{"on", "off", "blinking", "blink", "breathing", "breathe"} {
+		code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-l", state})
+		if code != exitOK || !strings.Contains(out, "would") || strings.Contains(out, "would fail") {
+			t.Errorf("state=%q: code=%d out=%q err=%q", state, code, out, errOut)
+		}
+	}
+}
+
 func TestParseArgs_AttachedLongForms(t *testing.T) {
 	opts, err := parseArgs([]string{"--board=ex4", "--serial=/dev/ttyS2", "-f", "2"})
 	if err != nil {
