@@ -157,10 +157,18 @@ func TestPageAlign(t *testing.T) {
 // via its internal mutex, making concurrent use from multiple
 // goroutines safe. Confirm that under `go test -race`: many
 // goroutines hammering WriteReg32/ReadReg32 on a handful of shared
-// addresses, finishing with a concurrent Close from one of them,
-// must never race - if Close ever stopped taking the lock (the bug
-// this test would have caught: it didn't originally), -race would
-// flag the close racing against an in-flight mmap/write.
+// addresses, with a GENUINELY concurrent Close() racing against
+// them (not one run only after everything else has already
+// finished, which an earlier version of this test did despite this
+// comment's own claim otherwise - that version could never have
+// caught a regression in Close()'s own locking at all, since nothing
+// was left running for Close() to race against by the time it ran).
+// If Close ever stopped taking the lock, -race would flag the close
+// racing against an in-flight mmap/write; once Close() does win the
+// race, every later Read/Write/SetClearBits legitimately starts
+// failing (the file is gone) - that's expected and not itself a
+// failure, so only a genuine race (caught by -race) or a panic fails
+// this test, not an individual operation's error return.
 func TestMem_ConcurrentAccessIsRaceFree(t *testing.T) {
 	mem := newFakeMem(t, 1<<20)
 
@@ -174,22 +182,24 @@ func TestMem_ConcurrentAccessIsRaceFree(t *testing.T) {
 			defer wg.Done()
 			addr := addrs[i%len(addrs)]
 			if err := mem.WriteReg32(addr, uint32(i)); err != nil {
-				t.Errorf("WriteReg32: %v", err)
-				return
+				return // expected once Close() has won the race - not a failure
 			}
 			if _, err := mem.ReadReg32(addr); err != nil {
-				t.Errorf("ReadReg32: %v", err)
+				return
 			}
-			if err := mem.SetClearBits(addr, 0x1, 0x2); err != nil {
-				t.Errorf("SetClearBits: %v", err)
-			}
+			_ = mem.SetClearBits(addr, 0x1, 0x2)
 		}(i)
 	}
-	wg.Wait()
 
-	if err := mem.Close(); err != nil {
-		t.Errorf("Close: %v", err)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := mem.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	wg.Wait()
 }
 
 // SetClearBits does ReadReg32 then WriteReg32 - if each merely took
