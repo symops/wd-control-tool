@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -121,6 +122,26 @@ func TestRun_BoardPositionDoesNotMatter(t *testing.T) {
 // verbatim argument (and fails, if at all, at THAT action's own
 // validation layer - a bad fan level, an unknown rtc subcommand - not
 // as a phantom second board flag).
+// Sibling check for the modifier flags (-n/-D), not just -b/--board:
+// an action's own consumed argument(s) must never be re-examined as
+// a flag by the SECOND pass either - it jumps straight past them
+// (i = end-1 after slicing args[start:end] for the action), so this
+// should already hold by construction, but it's cheap to pin
+// directly rather than rely on that alone.
+func TestRun_DisplayTextLooksLikeModifierFlag(t *testing.T) {
+	for _, text := range []string{"-n", "-D", "--dry-run", "--debug"} {
+		code, out, errOut := captureRun(t, []string{"-b", "ex4", "-n", "-d", text})
+		if code != exitOK {
+			t.Errorf("text=%q: code=%d out=%q err=%q", text, code, out, errOut)
+			continue
+		}
+		want := fmt.Sprintf("display text %q", text)
+		if !strings.Contains(out, want) {
+			t.Errorf("text=%q: out=%q, want it to contain %q", text, out, want)
+		}
+	}
+}
+
 func TestRun_ActionArgumentThatLooksLikeBoardFlag(t *testing.T) {
 	cases := []struct {
 		args     []string
