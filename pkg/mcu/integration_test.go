@@ -24,7 +24,8 @@ func TestEX2U_FanPercent_OverPTY(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- m.FanPercent(50) }()
 
-	// 7 bytes * 100ms pacing = ~700ms; give it real headroom.
+	// No deliberate inter-byte delay (see ex2u.go) - the timeout here
+	// is just generous headroom, not sized to any expected pacing.
 	got := fake.ReadFrame(t, 7, 3*time.Second)
 	if err := <-done; err != nil {
 		t.Fatalf("FanPercent(50): %v", err)
@@ -61,8 +62,8 @@ func TestEX4_FanLevel_OverPTY(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- m.FanLevel(3) }()
 
-	// EX4's inter-byte pacing (10us) is negligible - no need for a
-	// generous timeout the way EX2U's 100ms pacing needs one.
+	// EX4's inter-byte pacing (10us) is negligible, same as EX2U's
+	// (which has none at all - see ex2u.go).
 	got := fake.ReadFrame(t, 7, time.Second)
 	if err := <-done; err != nil {
 		t.Fatalf("FanLevel(3): %v", err)

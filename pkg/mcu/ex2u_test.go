@@ -158,7 +158,7 @@ func TestEX2U_LEDOnOff_ConcurrentCallsNeverInterleave(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2U(OpenFile(fake.Slave))
 
-	const rounds = 5 // EX2U's 100ms/byte pacing makes this slow; keep it short
+	const rounds = 25 // no deliberate inter-byte delay (see ex2u.go), so this is cheap now
 	var wg sync.WaitGroup
 	callErrs := make(chan error, 2)
 	wg.Add(2)

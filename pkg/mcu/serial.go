@@ -76,10 +76,12 @@ func (p *Port) Close() error {
 }
 
 // sendBytes writes b one byte at a time with the given inter-byte
-// pacing, matching the vendor daemons' own transmit loop (see
-// SPEC.md: EX2U uses ~100ms mdelay-style pacing; EX2/EX4's
-// up_send_daemon used usleep(10us), which is negligible next to the
-// UART's own bit time - but it is reproduced here for parity).
+// pacing (nil for none), matching the vendor tools' own transmit
+// loop (see SPEC.md: EX2U's mcu_ctl has no deliberate delay at all -
+// corrected after a real-hardware failure traced back to a wrong
+// assumption that it slept ~100ms between bytes; EX2/EX4's
+// up_send_daemon used usleep(10us), negligible next to the UART's
+// own bit time but reproduced here for parity).
 // Holds mu for the whole frame (including the inter-byte sleeps), so
 // a concurrent sender's frame can only start after this one's FB (or
 // equivalent end byte) has gone out, never interleaved with it.

@@ -1,21 +1,31 @@
 package mcu
 
-import "time"
-
 // EX2U's Welltrend 6703F-OG240WT MCU protocol, on uart1, 19200 8N1.
 // Hardware-confirmed (captured via strace on real hardware, and the
 // shutdown command end-to-end tested against the kernel driver that
 // now also speaks it natively - see SPEC.md, "EX2U protocol").
 //
 // Frame: 7 bytes, FA <cat> <subcmd> <param> 00 00 FB, one byte at a
-// time with ~100ms inter-byte pacing. No checksum.
+// time with NO deliberate inter-byte delay. No checksum.
+//
+// CORRECTED after a real-hardware failure report: this file
+// previously slept 100ms between bytes, based on a (wrong, never
+// actually strace-confirmed) assumption that this was "the real
+// hardware's own margin". A live `strace -tt` capture of the real,
+// working `mcu_ctl fan_set_50` on actual EX2U hardware (the same
+// house rule this project always uses - never guess, capture) showed
+// consecutive single-byte write() calls roughly 0.5ms apart - pure
+// syscall/O_SYNC overhead, no explicit sleep at all. Sending with a
+// 100ms gap instead (200x slower) let every write() succeed at the
+// OS level (no error ever surfaced) while the Welltrend MCU's own
+// frame-reception state machine most likely timed out between bytes
+// and never saw a complete, valid frame - explaining exactly the
+// symptom reported: no error, but the hardware never responded. See
+// SPEC.md's "EX2U protocol" section for the exact captured timings.
 
 const (
 	ex2uStart = 0xFA
 	ex2uEnd   = 0xFB
-	// The real hardware's own defensive margin, reproduced here rather
-	// than risk finding out it was load-bearing. See SPEC.md.
-	ex2uInterByteDelay = 100 * time.Millisecond
 )
 
 // EX2U is a Port bound to the Welltrend MCU's command set.
@@ -38,7 +48,7 @@ func (m *EX2U) send(cat, subcmd, param byte) error {
 }
 
 func sendEX2U(p *Port, frame []byte) error {
-	return p.sendBytes(frame, func() { time.Sleep(ex2uInterByteDelay) })
+	return p.sendBytes(frame, nil) // no deliberate inter-byte delay - see the file's own doc comment
 }
 
 // LED state for EX2U's single blue-only "status" LED (not GPIO, not

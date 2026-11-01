@@ -666,9 +666,7 @@ func TestRun_RealRun_TwoChainedDisplayActions_DifferentLengths(t *testing.T) {
 // (fan alone, or led alone - see
 // TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState). Confirms
 // TWO chained EX2U actions (fan then led) BOTH succeed for real and
-// BOTH produce exactly the right frame on the wire, in order - the
-// EX2U-specific combination of its 100ms/byte pacing with a real
-// multi-action chain.
+// BOTH produce exactly the right frame on the wire, in order.
 func TestRun_RealRun_EX2U_FanThenLed_BothSucceed(t *testing.T) {
 	fake := fakemcu.New(t)
 

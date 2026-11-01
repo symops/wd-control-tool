@@ -51,8 +51,23 @@ against real hardware, not just statically).
 
 - 19200 baud, 8N1, no parity, no flow control.
 - Frame: 7 bytes, `FA <cat> <subcmd> <param> 00 00 FB`, sent one byte
-  at a time with ~100ms inter-byte pacing (the real hardware's own
-  margin, reproduced rather than risk finding out it was load-bearing).
+  at a time with **no deliberate inter-byte delay**. A live `strace
+  -tt` capture of the real, working `mcu_ctl fan_set_50` on actual
+  EX2U hardware shows seven single-byte `write()` calls roughly
+  0.4-0.6ms apart - pure syscall/`O_SYNC` overhead, no `usleep`/
+  `mdelay` in between. **Corrected** after a real-hardware failure
+  report: an earlier version of this spec (and of
+  `wd-control-tool`'s own `pkg/mcu/ex2u.go`) claimed ~100ms pacing as
+  "the real hardware's own margin" - that was never actually
+  strace-confirmed, and sending with it (200x slower than the real
+  tool) let every `write()` succeed with no I/O error while the
+  Welltrend MCU's own frame-reception state machine most likely
+  timed out between bytes and never saw a complete frame - no error
+  surfaced anywhere, the fan simply never responded. Lesson for this
+  spec specifically: "hardware-confirmed" above refers to the frame
+  *bytes* and baud/framing (confirmed via the kernel driver
+  end-to-end test); the pacing figure had silently drifted into an
+  unconfirmed guess despite sitting right next to that claim.
 - No checksum.
 
 | Command | Bytes |
@@ -371,25 +386,6 @@ display at all.
    needed for this tool's current feature set).
 6. EX2U's `sys_reboot` byte sequence was never captured (see EX2U
    protocol table) - do not guess it if ever needed.
-7. **EX2U real-hardware mystery, in progress**: on a real EX2U unit
-   (Debian userland), `-b ex2u -f 50 -D` sent the documented-correct
-   frame (`FA 02 00 80 00 00 FB`, matching the `fan_set_50` table
-   entry exactly) with no I/O error, but the fan did not respond,
-   while the vendor's own `mcu_ctl fan_set_50` worked. The first
-   hypothesis - a wrong `--serial` device path (`/dev/ttyS1` was
-   previously only "confirmed for EX2/EX4", not EX2U) - was
-   **ruled out** by a live capture of the real, working tool:
-   `strace -f -e trace=open,openat mcu_ctl fan_set_50` opens the
-   exact same path with the exact same flags
-   (`openat(AT_FDCWD, "/dev/ttyS1", O_RDWR|O_NOCTTY|O_SYNC)`) our own
-   `mcu.Open` does. So `/dev/ttyS1` IS the right device after all;
-   something else differs. Next step (per this project's own house
-   rule - never guess, always capture): a fuller trace of the same
-   real command, `strace -f -tt -x -e trace=ioctl,write,openat
-   mcu_ctl fan_set_50`, to compare the exact termios `ioctl` (TCSETS
-   vs something else) and the exact `write()` byte sequence/timing
-   against `wd-control-tool`'s own `mcu.Open`/`sendBytes`. Do not
-   guess a fix before that capture is in hand.
 
 ## Author
 
