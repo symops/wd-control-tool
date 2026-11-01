@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/symops/wd-control-tool/test/fakemcu"
+	"golang.org/x/sys/unix"
 )
 
 // Open itself (termios setup included) had zero test coverage before
@@ -46,6 +47,31 @@ func TestOpen_UnsupportedBaud(t *testing.T) {
 		if _, err := Open(fake.SlavePath, baud); err == nil {
 			t.Errorf("Open(..., %d): want error, got nil", baud)
 		}
+	}
+}
+
+// Open's termios-configure error branch (IoctlSetTermios failing)
+// had zero coverage - every other test opens a real pty, where it
+// always succeeds. Closed by pointing Open at a regular file instead
+// of a tty: os.OpenFile succeeds (it's a real file), but
+// IoctlSetTermios on a non-tty fd fails with ENOTTY ("inappropriate
+// ioctl for device") - confirmed by hand first with a throwaway
+// probe program before writing this as a permanent test.
+func TestOpen_NonTTYPath_ConfigureFails(t *testing.T) {
+	f, err := os.CreateTemp("", "wd-control-tool-mcu-test-notty-*")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+
+	_, err = Open(f.Name(), 19200)
+	if err == nil {
+		t.Fatal("Open on a regular file (not a tty): want a termios-configure error, got nil")
+	}
+	var errno unix.Errno
+	if !errors.As(err, &errno) || errno != unix.ENOTTY {
+		t.Errorf("Open error = %v, want it to wrap ENOTTY (errors.As)", err)
 	}
 }
 
