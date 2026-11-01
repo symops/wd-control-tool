@@ -88,6 +88,9 @@ func EX2FanStatusRequestFrame() []byte { return buildFixedFrame(ex2FanStatusGet)
 // the decode, layered on top rather than built in, matching this
 // project's EX2U TempReply/EX2UDecodeTempCelsius split.
 func (m *EX2) FanStatusReply(timeout time.Duration) ([]byte, error) {
+	if err := m.p.flushInput(); err != nil {
+		return nil, err
+	}
 	if err := m.RequestFanStatus(); err != nil {
 		return nil, err
 	}
@@ -118,14 +121,17 @@ func (m *EX2) FanStatusReply(timeout time.Duration) ([]byte, error) {
 // the arithmetically safe choice (a stopped fan logically reads 0),
 // not a hardware claim: no real capture has a period of 0 to confirm
 // what the MCU actually sends for a stopped fan.
+//
+// Scans reply for the matching frame via findFrame rather than
+// assuming it starts at offset 0: real hardware was found to
+// interleave an unsolicited, unrelated `FA 30 00 00 00 00 FB` frame
+// with this one, in any order - see findFrame's own doc comment.
 func EX2DecodeFanRPM(reply []byte) (int, error) {
-	if len(reply) < 7 {
-		return 0, fmt.Errorf("mcu: fan status reply too short (%d byte(s), want at least 7): % X", len(reply), reply)
+	frame, err := findFrame(reply, ex2FanStatusGet.B4, ex2FanStatusGet.B5)
+	if err != nil {
+		return 0, err
 	}
-	if reply[0] != legacyStart || reply[6] != legacyEnd {
-		return 0, fmt.Errorf("mcu: fan status reply % X doesn't match the expected FA..FB frame shape", reply[:7])
-	}
-	period := reply[5]
+	period := frame[5]
 	if period == 0 {
 		return 0, nil
 	}

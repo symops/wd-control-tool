@@ -142,6 +142,19 @@ func TestEX2UDecodeTempFahrenheit_RejectsShortOrMalformedReply(t *testing.T) {
 	}
 }
 
+// TempReply's flushInput error branch had no coverage - close the
+// underlying fd first, same technique used elsewhere in this
+// package for this exact kind of branch.
+func TestEX2U_TempReply_FlushErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2U(OpenFile(fake.Slave))
+	fake.Slave.Close()
+
+	if _, err := m.TempReply(time.Second); err == nil {
+		t.Fatal("TempReply after Close: want error, got nil")
+	}
+}
+
 func TestEX2U_TempReply_ReturnsWhateverRawBytesArrive(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2U(OpenFile(fake.Slave))

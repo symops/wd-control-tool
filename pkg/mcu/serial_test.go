@@ -137,3 +137,55 @@ func TestPort_Close_ConcurrentWithSendBytesIsRaceFree(t *testing.T) {
 
 	wg.Wait()
 }
+
+// flushInput's error branch (the TCFLSH ioctl failing) had no
+// coverage - same technique as TestPort_SendBytes_WriteErrorPropagates:
+// close the underlying fd out from under the Port first.
+func TestPort_FlushInput_ErrorOnClosedFd(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+	fake.Slave.Close()
+
+	err := p.flushInput()
+	if err == nil {
+		t.Fatal("flushInput on a closed fd: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "mcu: flush input:") {
+		t.Errorf("flushInput error = %q, want it wrapped with \"mcu: flush input:\" context", err.Error())
+	}
+}
+
+// flushInput's actual purpose (discarding leftover bytes already
+// sitting in the kernel's receive buffer from BEFORE a request is
+// sent) is specific to a real tty's receive queue persisting across
+// opens, which a fresh pty pair in a test can't reproduce - this
+// only confirms the call itself succeeds against a pty and doesn't
+// error out, and that it drains bytes written before it runs.
+func TestPort_FlushInput_DoesNotErrorAndDrainsPendingBytes(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	if _, err := fake.Master.Write([]byte{0x01, 0x02, 0x03}); err != nil {
+		t.Fatalf("write pending bytes: %v", err)
+	}
+	// Give the slave's input queue a moment to actually receive what
+	// was just written before flushing it - otherwise this could flush
+	// before the bytes have arrived, making the test pass for the
+	// wrong reason.
+	time.Sleep(50 * time.Millisecond)
+
+	if err := p.flushInput(); err != nil {
+		t.Fatalf("flushInput: %v", err)
+	}
+
+	if _, err := fake.Master.Write([]byte{0xAA}); err != nil {
+		t.Fatalf("write post-flush byte: %v", err)
+	}
+	got, err := p.recvBytes(make([]byte, 16), time.Second)
+	if err != nil {
+		t.Fatalf("recvBytes: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("recvBytes returned %d byte(s), want exactly 1 (the pre-flush bytes should have been discarded)", got)
+	}
+}

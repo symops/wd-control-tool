@@ -1,9 +1,6 @@
 package mcu
 
-import (
-	"fmt"
-	"time"
-)
+import "time"
 
 // EX2U's Welltrend 6703F-OG240WT MCU protocol, on uart1, 19200 8N1.
 // Hardware-confirmed (captured via strace on real hardware, and the
@@ -92,6 +89,9 @@ func (m *EX2U) TempRaw() error { return m.send(0x03, 0x08, 0x00) }
 // came back even when decoding fails or a future reply shape differs
 // from the one captured so far.
 func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
+	if err := m.p.flushInput(); err != nil {
+		return nil, err
+	}
 	if err := m.TempRaw(); err != nil {
 		return nil, err
 	}
@@ -116,17 +116,20 @@ func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
 // rounding coincidence), so byte 5 is the temperature in whole-degree
 // Fahrenheit - matching tmp_get_f/tmp_get_c sharing one wire command
 // (see SPEC.md's command table). The capture's trailing 8th byte
-// (0xFA) is NOT yet explained (maybe the start of a second,
-// unprompted reply) - this function only looks at the first 7 bytes,
-// the part that is actually confirmed.
+// (0xFA) was not explained at the time; EX2's MCU was later found to
+// send an unsolicited, unrelated frame independent of request/reply
+// timing (see findFrame's doc comment) - plausibly the same thing
+// happening here, the start of one such frame on EX2U too, though
+// that's not independently confirmed for this board.
+//
+// Scans reply for the matching frame via findFrame rather than
+// assuming it starts at offset 0, for the same reason.
 func EX2UDecodeTempFahrenheit(reply []byte) (int, error) {
-	if len(reply) < 7 {
-		return 0, fmt.Errorf("mcu: tmp_get reply too short (%d byte(s), want at least 7): % X", len(reply), reply)
+	frame, err := findFrame(reply, 0x03, 0x08)
+	if err != nil {
+		return 0, err
 	}
-	if reply[0] != ex2uStart || reply[6] != ex2uEnd {
-		return 0, fmt.Errorf("mcu: tmp_get reply % X doesn't match the expected FA..FB frame shape", reply[:7])
-	}
-	return int(reply[5]), nil
+	return int(frame[5]), nil
 }
 
 // EX2UDecodeTempCelsius is EX2UDecodeTempFahrenheit converted to

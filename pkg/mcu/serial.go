@@ -115,6 +115,54 @@ func (p *Port) sendBytes(b []byte, pace func()) error {
 	return nil
 }
 
+// findFrame scans buf for the first 7-byte window starting with
+// 0xFA, ending 6 bytes later with 0xFB, with cat/subcmd at offsets 1
+// and 2 - skipping over anything else in buf before or after it.
+//
+// Needed because a specific request's reply isn't reliably at
+// buf[0:7]: real EX2 hardware was found to interleave an unsolicited
+// `FA 30 00 00 00 00 FB` frame with FanStatusGet's own reply,
+// independent of request/reply timing (sometimes before it,
+// sometimes after, sometimes a leftover one from a previous
+// invocation glued to the front of the current one - see
+// (*Port).flushInput, which reduces but may not eliminate every
+// case). EX2DecodeFanRPM and EX2UDecodeTempFahrenheit both call this
+// instead of assuming an offset.
+func findFrame(buf []byte, cat, subcmd byte) ([]byte, error) {
+	const frameLen = 7
+	for i := 0; i+frameLen <= len(buf); i++ {
+		if buf[i] == 0xFA && buf[i+6] == 0xFB && buf[i+1] == cat && buf[i+2] == subcmd {
+			return buf[i : i+frameLen], nil
+		}
+	}
+	return nil, fmt.Errorf("mcu: no FA %02X %02X .. FB frame found in reply: % X", cat, subcmd, buf)
+}
+
+// flushInput discards any bytes already waiting to be read on the
+// port, without reading them, via TCFLSH(TCIFLUSH) - called right
+// before sending a request that expects a reply.
+//
+// Hardware-confirmed to matter: real EX2 hardware was found to leave
+// leftover bytes in the kernel's receive buffer between separate
+// invocations of this tool (each one opens a fresh fd, but the
+// kernel's own input queue for the device persists across opens) -
+// confirmed by a real capture where a reply showed up duplicated
+// (the previous invocation's full reply, never read, stuck to the
+// front of the new one) and another where it showed up truncated
+// with no leading FA at all (a previous invocation's tail end,
+// missing its own head because something upstream had already
+// consumed it). TCIFLUSH (0) is the standard POSIX value - not
+// separately exported by golang.org/x/sys/unix for linux the way
+// TCIOFLUSH/TCOFLUSH sometimes are on other OSes, so it's passed as
+// a literal here.
+func (p *Port) flushInput() error {
+	const tcIFlush = 0
+	if err := unix.IoctlSetInt(int(p.f.Fd()), unix.TCFLSH, tcIFlush); err != nil {
+		return fmt.Errorf("mcu: flush input: %w", err)
+	}
+	return nil
+}
+
 // recvBytes reads whatever bytes arrive on the port within timeout.
 // Zero bytes with a nil error is a normal "nothing arrived in time"
 // outcome (the expected result for any reply this project hasn't

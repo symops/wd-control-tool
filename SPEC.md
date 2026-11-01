@@ -339,6 +339,22 @@ Both EX2 and EX4 read other sensors too (`ThermalGet`/
 "Request/response" above) - only `FanStatusGet`'s RPM reply has been
 decoded so far.
 
+**Unsolicited frame on the wire, confirmed via `-D`/`--debug`**: real
+EX2 hardware was found to send a `FA 30 00 00 00 00 FB` frame
+independent of request/reply timing - sometimes right after this
+tool's own reply, sometimes before it, sometimes a previous
+invocation's never-read leftover glued to the front of the next
+one's reply (the kernel's own receive-buffer queue for the tty
+persists across separate opens of the same device). `b4=0x30` is not
+a command this spec's EX2 table lists under that byte, so its actual
+meaning/purpose is unknown - not investigated further since it
+doesn't block anything this tool implements. Handled by
+`(*Port).flushInput` (drains stale bytes right before sending a
+request) and `findFrame` (scans for the matching reply rather than
+assuming it's at the front) in `pkg/mcu/serial.go` - see either's own
+doc comment for the exact captured byte sequences that justified
+this.
+
 ## LED (EX2/EX4)
 
 Two genuinely different mechanisms, not one - found out the hard way

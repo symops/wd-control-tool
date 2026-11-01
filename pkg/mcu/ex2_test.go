@@ -111,6 +111,67 @@ func TestEX2DecodeFanRPM_ZeroPeriodIsZeroRPMNotDivideByZero(t *testing.T) {
 	}
 }
 
+// Exact buffers pasted from real EX2 hardware runs of
+// `wd-control-tool -b ex2 -f rpm -D`, showing an unsolicited
+// `FA 30 00 00 00 00 FB` frame interleaved with FanStatusGet's own
+// reply in various ways - see findFrame's doc comment. All of these
+// must decode to the right RPM despite the extra bytes.
+func TestEX2DecodeFanRPM_RealCapturedNoisyReplies(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply []byte
+		want  int
+	}{
+		{
+			"reply then trailing unsolicited frame",
+			[]byte{0xFA, 0x03, 0x09, 0x00, 0x00, 0x38, 0xFB, 0xFA, 0x30, 0x00, 0x00, 0x00, 0x00, 0xFB},
+			5357,
+		},
+		{
+			"two full copies glued together (leftover from a previous invocation)",
+			[]byte{
+				0xFA, 0x03, 0x09, 0x00, 0x00, 0x39, 0xFB, 0xFA, 0x30, 0x00, 0x00, 0x00, 0x00, 0xFB,
+				0xFA, 0x03, 0x09, 0x00, 0x00, 0x39, 0xFB, 0xFA, 0x30, 0x00, 0x00, 0x00, 0x00, 0xFB,
+			},
+			5263,
+		},
+		{
+			"reply then a truncated trailing unsolicited frame",
+			[]byte{0xFA, 0x03, 0x09, 0x00, 0x00, 0x39, 0xFB, 0xFA},
+			5263,
+		},
+		{
+			"unsolicited frame BEFORE the reply (not observed, but the scan must not assume reply-first)",
+			[]byte{0xFA, 0x30, 0x00, 0x00, 0x00, 0x00, 0xFB, 0xFA, 0x03, 0x09, 0x00, 0x00, 0x38, 0xFB},
+			5357,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := EX2DecodeFanRPM(c.reply)
+			if err != nil {
+				t.Fatalf("EX2DecodeFanRPM(% X): %v", c.reply, err)
+			}
+			if got != c.want {
+				t.Errorf("EX2DecodeFanRPM(% X) = %d, want %d", c.reply, got, c.want)
+			}
+		})
+	}
+}
+
+// The one real case that's genuinely unrecoverable from the bytes
+// alone: a previous invocation's leftover tail, missing its own
+// head, with the real reply never having arrived in this read at
+// all. flushInput (called before the request is sent) is what
+// prevents this upstream; decoding can only report it honestly, not
+// guess around it.
+func TestEX2DecodeFanRPM_RealCapturedHeadlessTailIsUnrecoverable(t *testing.T) {
+	reply := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+	if _, err := EX2DecodeFanRPM(reply); err == nil {
+		t.Errorf("EX2DecodeFanRPM(% X): want error (no complete matching frame present), got nil", reply)
+	}
+}
+
 func TestEX2DecodeFanRPM_RejectsShortOrMalformedReply(t *testing.T) {
 	cases := [][]byte{
 		nil,
@@ -146,6 +207,19 @@ func TestEX2_PowerLED_SendsBothFramesInOrder(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}
+
+// FanStatusReply's flushInput error branch had no coverage - close
+// the underlying fd first, same technique as
+// TestPort_FlushInput_ErrorOnClosedFd.
+func TestEX2_FanStatusReply_FlushErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+	fake.Slave.Close()
+
+	if _, err := m.FanStatusReply(time.Second); err == nil {
+		t.Fatal("FanStatusReply after Close: want error, got nil")
 	}
 }
 
