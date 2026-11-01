@@ -57,7 +57,10 @@ make test-race   # go vet + go test -race ./... - run before every push, not jus
 make fuzz        # actually fuzz (not just the seed corpus `test` runs) - 30s per target by default, `make fuzz FUZZTIME=5m` for longer
 ```
 
-Coverage, all without root or real hardware:
+Coverage, all without real hardware and (`pkg/regio`'s
+`TestOpen_OpensRealDevMem` aside - it opens and immediately closes
+the real `/dev/mem` if root, skips if not, and never touches a
+register either way) without root:
 
 - Golden-byte unit tests for the frame-encoding functions
   (`pkg/mcu/*_test.go`), checked against the worked examples in
