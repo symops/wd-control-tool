@@ -627,6 +627,34 @@ func TestRun_RealRun_TwoChainedDisplayActions_DifferentLengths(t *testing.T) {
 	}
 }
 
+// Every existing EX2U real-run test exercises exactly one action
+// (fan alone, or led alone - see
+// TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState). Confirms
+// TWO chained EX2U actions (fan then led) BOTH succeed for real and
+// BOTH produce exactly the right frame on the wire, in order - the
+// EX2U-specific combination of its 100ms/byte pacing with a real
+// multi-action chain.
+func TestRun_RealRun_EX2U_FanThenLed_BothSucceed(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-f", "25", "-l", "on"})
+	if code != exitOK {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+
+	fanFrame := fake.ReadFrame(t, 7, 3*time.Second)
+	wantFan := []byte{0xFA, 0x02, 0x00, 0x40, 0x00, 0x00, 0xFB} // 25% = 0x40
+	if !bytes.Equal(fanFrame, wantFan) {
+		t.Errorf("1st frame (fan) = % X, want % X", fanFrame, wantFan)
+	}
+
+	ledFrame := fake.ReadFrame(t, 7, 3*time.Second)
+	wantLed := []byte{0xFA, 0x03, 0x06, 0x01, 0x00, 0x00, 0xFB} // led on
+	if !bytes.Equal(ledFrame, wantLed) {
+		t.Errorf("2nd frame (led) = % X, want % X", ledFrame, wantLed)
+	}
+}
+
 func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	// A path that cannot exist makes mcu.Open fail at os.OpenFile,
 	// before any real device is touched - a safe way to exercise the
