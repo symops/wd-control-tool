@@ -149,16 +149,27 @@ func parseArgs(args []string) (*options, error) {
 	// ordering this already-narrow case depends on - not worth
 	// chasing further for this CLI's actual argument vocabulary
 	// (zone/color/state names, never "-b"-shaped in practice).
+	// Keeps the FIRST successfully-parsed value, never a later one -
+	// matching setBoard's own "first occurrence wins, a later
+	// DIFFERENT one is a conflict" semantics below. Found the hard
+	// way: keeping the LAST value instead (as an earlier version of
+	// this hint did) could make `-l on -b ex2u -b ex4` compute the
+	// WRONG arity for -l (sized for ex4, not the genuinely-first
+	// ex2u), which then swallowed the real "-b ex2u" into led's own
+	// (mis-sized) argument span - so the real pass below never even
+	// saw it as a board flag, silently losing the conflict check
+	// entirely and failing with a confusing "unknown led zone" error
+	// instead of a clear "conflicts with an earlier -b" one.
 	var hintBoard board.Board
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if (a == "-b" || a == "--board") && i+1 < len(args) {
-			if b, err := board.Parse(args[i+1]); err == nil {
+			if b, err := board.Parse(args[i+1]); err == nil && hintBoard == board.Unknown {
 				hintBoard = b
 			}
 			i++
 		} else if strings.HasPrefix(a, "--board=") {
-			if b, err := board.Parse(strings.TrimPrefix(a, "--board=")); err == nil {
+			if b, err := board.Parse(strings.TrimPrefix(a, "--board=")); err == nil && hintBoard == board.Unknown {
 				hintBoard = b
 			}
 		}

@@ -687,6 +687,29 @@ func TestRun_MultipleActionsBeforeBoard_EX2U(t *testing.T) {
 	}
 }
 
+// Regression test for a subtler instance of the same hint-pass bug
+// class: `-l on -b ex2u -b ex4` has led BEFORE two CONFLICTING
+// -b/--board occurrences. An earlier version of the hint pass kept
+// the LAST value it saw (ex4) rather than the first (ex2u), sizing
+// -l's arity for ex4 (3 tokens) instead of the genuinely-first
+// ex2u's real arity (1) - which swallowed the real "-b ex2u" into
+// led's own (mis-sized) argument span, so the real pass never saw
+// it as a board flag at all and the conflict check never fired:
+// instead of a clear "conflicts with an earlier -b", this failed
+// with a confusing "unknown led zone \"on\"" (led's own 3 assumed
+// arguments ended up being "on", "-b", "ex2u" - garbage zone/color/
+// state). Fixed by having the hint keep the first value, matching
+// setBoard's own "first occurrence wins" semantics.
+func TestRun_LedBeforeConflictingBoards_EX2U(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-l", "on", "-b", "ex2u", "-b", "ex4", "-n"})
+	if code != exitUsage {
+		t.Fatalf("code=%d errOut=%q, want exitUsage", code, errOut)
+	}
+	if !strings.Contains(errOut, "conflicts") {
+		t.Errorf("errOut=%q, want it to clearly report the board conflict, not a confusing led-validation error", errOut)
+	}
+}
+
 func TestParseArgs_ModifiersAfterAction(t *testing.T) {
 	// Unlike the old -c-delimited grammar, -n/-D are ordinary flags
 	// now and may appear AFTER an action's fixed-arity arguments too.
