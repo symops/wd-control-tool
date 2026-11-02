@@ -36,6 +36,40 @@ func TestEX4Writer_Set(t *testing.T) {
 	}
 }
 
+// CONFIRMED BUG regression test: Set() used to extract fields
+// directly from whatever zone t was tagged with, silently writing
+// the wrong absolute moment whenever t wasn't already UTC (every
+// other test in this file happens to construct t with time.UTC
+// directly, which could never have caught this - a real-hardware
+// test comparing `date` against the vendor `rtc -w`'s own "system
+// time:" line, exactly 3 hours apart, is what actually found it).
+// Same instant as TestEX4Writer_Set's own `when`
+// (2026-11-01T10:20:30Z), expressed in a +03 zone instead - must
+// produce the IDENTICAL wire bytes.
+func TestEX4Writer_Set_ConvertsNonUTCInputToUTC(t *testing.T) {
+	fake := fakemcu.New(t)
+	w := EX4Writer{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
+
+	plus3 := time.FixedZone("TEST+03", 3*3600)
+	when := time.Date(2026, time.November, 1, 13, 20, 30, 0, plus3) // == 2026-11-01T10:20:30Z
+
+	done := make(chan error, 1)
+	go func() { done <- w.Set(when) }()
+
+	got := fake.ReadFrame(t, 13, 3*time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	want, err := mcu.EX4DateTimeFrame(2026, 11, 1, 0, 10, 20, 30) // the UTC fields, not the +03 ones
+	if err != nil {
+		t.Fatalf("EX4DateTimeFrame: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X (the UTC fields - got the +03 ones instead if this fails)", got, want)
+	}
+}
+
 func TestEX4Writer_Set_WeekdayEncoding(t *testing.T) {
 	// Confirm every day of one week maps dow 0..6 Sun..Sat, matching
 	// Go's own time.Weekday numbering, with no off-by-one.
@@ -92,6 +126,33 @@ func TestEX2Writer_Set(t *testing.T) {
 	}
 }
 
+// Same CONFIRMED BUG regression as TestEX4Writer_Set_ConvertsNonUTCInputToUTC,
+// for EX2Writer - same instant as TestEX2Writer_Set's own `when`
+// (2026-11-02T13:38:58Z), expressed in a +03 zone instead.
+func TestEX2Writer_Set_ConvertsNonUTCInputToUTC(t *testing.T) {
+	fake := fakemcu.New(t)
+	w := EX2Writer{MCU: mcu.NewEX2(mcu.OpenFile(fake.Slave))}
+
+	plus3 := time.FixedZone("TEST+03", 3*3600)
+	when := time.Date(2026, time.November, 2, 16, 38, 58, 0, plus3) // == 2026-11-02T13:38:58Z
+
+	done := make(chan error, 1)
+	go func() { done <- w.Set(when) }()
+
+	got := fake.ReadFrame(t, 13, 3*time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	want, err := mcu.EX2DateTimeFrame(2026, 11, 2, 1, 13, 38, 58) // the UTC fields, not the +03 ones
+	if err != nil {
+		t.Fatalf("EX2DateTimeFrame: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X (the UTC fields - got the +03 ones instead if this fails)", got, want)
+	}
+}
+
 func TestEX2Reader_Read(t *testing.T) {
 	fake := fakemcu.New(t)
 	r := EX2Reader{MCU: mcu.NewEX2(mcu.OpenFile(fake.Slave))}
@@ -122,7 +183,7 @@ func TestEX2Reader_Read(t *testing.T) {
 	if !res.ok {
 		t.Fatal("Read: ok=false, want true (a reply arrived)")
 	}
-	want := time.Date(2026, time.November, 2, 13, 39, 43, 0, time.Local)
+	want := time.Date(2026, time.November, 2, 13, 39, 43, 0, time.UTC) // the RTC stores UTC - see EX4Writer's own doc comment
 	if !res.t.Equal(want) {
 		t.Errorf("Read = %v, want %v", res.t, want)
 	}

@@ -760,12 +760,20 @@ func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
 	// pacing delay of any action chained before this one),
 	// quietly breaking that promise.
 	now := time.Now()
-	year, mon, dom := now.Date()
-	dow := int(now.Weekday())
+	// The RTC stores UTC, not local time (confirmed on real EX2
+	// hardware - see pkg/rtc's own package doc comment for how).
+	// Fields come from now.UTC(), not now itself, so this preview
+	// frame matches exactly what EX4Writer/EX2Writer.Set(now) below
+	// actually sends (Set converts to UTC internally too) - the same
+	// -D accuracy promise this function's own top comment already
+	// requires.
+	utc := now.UTC()
+	year, mon, dom := utc.Date()
+	dow := int(utc.Weekday())
 
 	switch b {
 	case board.EX4:
-		frame, ferr := mcu.EX4DateTimeFrame(year, int(mon), dom, dow, now.Hour(), now.Minute(), now.Second())
+		frame, ferr := mcu.EX4DateTimeFrame(year, int(mon), dom, dow, utc.Hour(), utc.Minute(), utc.Second())
 		return &action{
 			describe:   fmt.Sprintf("write current time (%s) to EX4 MCU RTC (%s)", now.Format(time.RFC3339), serialPath),
 			debugLines: frameDebugLines(ferr, frame, serialPath, 19200),
@@ -780,7 +788,7 @@ func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
 			},
 		}, exitOK
 	case board.EX2:
-		frame, ferr := mcu.EX2DateTimeFrame(year, int(mon), dom, dow, now.Hour(), now.Minute(), now.Second())
+		frame, ferr := mcu.EX2DateTimeFrame(year, int(mon), dom, dow, utc.Hour(), utc.Minute(), utc.Second())
 		return &action{
 			describe:   fmt.Sprintf("write current time (%s) to EX2 MCU RTC (%s)", now.Format(time.RFC3339), serialPath),
 			debugLines: frameDebugLines(ferr, frame, serialPath, ex2LegacyBaud),
@@ -860,7 +868,14 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 				fmt.Printf("rtc: couldn't decode a time from the MCU's reply after %d attempts (run with -D to see the raw bytes)\n", ex2RTCMaxAttempts)
 				return nil
 			}
-			t := time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.Local)
+			// The RTC stores UTC, not local time (see pkg/rtc's own
+			// package doc comment for how that was confirmed) - tagged
+			// time.UTC here, matching the vendor rtc -r's own
+			// unconverted "RTC time = ..." wording below, and matching
+			// the real absolute moment SetSystemTime(t) needs for
+			// "s" to actually set the right system time rather than
+			// one off by the host's own timezone offset.
+			t := time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.UTC)
 			fmt.Printf("rtc: RTC time = %s\n", t.Format(rtcTimeLayout))
 			if !sync {
 				return nil
@@ -868,7 +883,7 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 			if err := rtc.SetSystemTime(t); err != nil {
 				return err
 			}
-			fmt.Printf("rtc: system time set to %s\n", t.Format(rtcTimeLayout))
+			fmt.Printf("rtc: system time set to %s\n", t.Local().Format(rtcTimeLayout))
 			return nil
 		},
 	}, exitOK

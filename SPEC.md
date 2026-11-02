@@ -544,7 +544,25 @@ Functions:
 ```
 
 `wd-control-tool -r`/`--rtc` mirrors these three letters directly
-(`w`/`r`/`s` - not the full words):
+(`w`/`r`/`s` - not the full words).
+
+**The RTC stores UTC, not local time** - confirmed on real EX2
+hardware by running `date` and the vendor `ex2.sh "rtc -w"` back to
+back in one session: `date` printed `Mon  2 Nov 18:14:14 +03 2026`
+(the host's own local time) while the vendor tool's own `rtc: system
+time: 2026/11/2 Mon 15:14:15` line printed exactly 3 hours earlier -
+i.e. the vendor applies NO timezone adjustment at all when it reads
+"the current time" to write to the RTC, and (by the same logic)
+prints none back when reading it either. `wd-control-tool`'s own
+`EX2Writer`/`EX4Writer.Set` convert their input to UTC first
+(`pkg/rtc/rtc.go`); `EX2Reader.Read`'s returned `time.Time` is tagged
+`time.UTC`, not `time.Local`; and the CLI's own `-w`/`-r`/`-s`
+(`cmd/wd-control-tool/main.go`'s `buildRTCWriteAction`/
+`buildRTCReadAction`) follow the same convention throughout. This was
+missed in the very first version of this feature (every test
+happened to construct its own example times already tagged UTC, so
+nothing caught it) - found only by comparing `date` against the
+vendor tool directly, not by reasoning about it.
 
 - **Write (SYS -> RTC, `rtc -w`)**: confirmed for **both** EX4 (see
   `WDateAndTime` above) and EX2. EX2's own live capture (`rtc -w`

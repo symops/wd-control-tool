@@ -480,6 +480,33 @@ decode failure a few times (`ex2RTCMaxAttempts`) as defense in depth
 genuinely corrupted reply (for whatever reason) is still possible in
 principle, even with the actual bug fixed.
 
+An eighth finding, once reads/writes were both reliably getting
+through: the real `-w`/`-r` round-trip looked correct in isolation
+(write a value, read it back, same value) but was never checked
+against an INDEPENDENT clock. Running `date` and the vendor `ex2.sh
+"rtc -w"` back to back in one session on real EX2 hardware showed
+`date` printing the host's local (`+03`) time while the vendor
+tool's own `rtc: system time: ...` line printed exactly 3 hours
+earlier - the vendor applies NO timezone adjustment at all; the RTC
+stores UTC. `wd-control-tool`'s `EX2Writer`/`EX4Writer.Set`
+(`pkg/rtc/rtc.go`) were extracting fields directly from whatever zone
+their input `time.Time` happened to carry - on a host where
+`time.Local` isn't UTC (this one), every write was off by the host's
+own timezone offset, and `EX2Reader.Read`'s result was tagged
+`time.Local` on top of UTC-valued fields, compounding the same
+mistake on read-back - meaning `-s` (sync) would have set the host's
+system clock to the WRONG absolute moment, silently, every time.
+Every existing test for this had constructed its own example times
+already tagged `time.UTC` directly, so none of them could have
+caught this - fixed by converting to UTC in `Set` and tagging
+`Read`'s result `time.UTC`, with a new pair of regression tests
+(`TestEX4Writer_Set_ConvertsNonUTCInputToUTC`/
+`TestEX2Writer_Set_ConvertsNonUTCInputToUTC`) that construct their
+own example time in a non-UTC zone specifically so this class of bug
+can't hide behind an all-UTC test suite again - confirmed to fail
+against the pre-fix code (reverted it, ran them, saw the wrong hour
+byte, restored the fix) before trusting them.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.
