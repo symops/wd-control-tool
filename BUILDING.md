@@ -356,6 +356,38 @@ just been disproven for the cases that WERE tested. See
 `pkg/led/led_test.go`'s `TestSet_HDBayLED` (golden-byte, from the
 real capture) and `TestPlan_HD2HD3Unconfirmed`.
 
+A fifth EX2 finding, RTC this time: `RDateAndTime`/`WDateAndTime`
+had been left unimplemented for EX2 entirely - the table's header
+bytes were known but nothing had decompiled or captured the
+write-side payload layout, and the reply format was the single
+biggest open item in the whole spec. Two live `strace -x` captures
+(`rtc -w` while the host's own system time was known to the second,
+`rtc -r` while the vendor tool's own printed RTC time was known)
+settled both at once: `WDateAndTime` is byte-for-byte the same
+13-byte shape as EX4's (`FA b4 b5 b6 b7 <7 BCD fields> FB`), just
+EX2's own header - with one correction to this spec's own table dump
+along the way (the extracted b7=`01` for this row isn't what's
+actually transmitted; the real wire byte is `07`, confirmed by the
+capture matching the known time field-by-field). `RDateAndTime`'s
+reply turned out to reuse that exact same 13-byte shape too - the
+request's own header echoed back, followed by the 7 BCD fields -
+rather than the request's own smaller frame, which nothing before
+this capture could have predicted. Added `mcu.EX2DateTimeFrame`/
+`EX2DecodeDateAndTime`/`(*EX2).SetDateAndTime`/`DateAndTimeReply` and
+`rtc.EX2Writer`/`EX2Reader`/`SetSystemTime`, exposed as
+`wd-control-tool -b ex2 -r w|r|s` (matching the real vendor `rtc`
+tool's own three letters exactly, not the old full-word "write" this
+project used before EX2's write was confirmed). `findFrame`
+(`pkg/mcu/serial.go`) was generalized from a hardcoded 7-byte frame
+to a variable header/length, since this reply is 13 bytes, not 7 -
+see `pkg/mcu/ex2_test.go`'s `TestEX2DateTimeFrame_RealCapturedExample`
+and `TestEX2DecodeDateAndTime_RealCapturedReply`. `s`'s second half
+(actually setting the host's system clock, `rtc.SetSystemTime` via
+`unix.Settimeofday`) is a real, hardware/OS-affecting side effect -
+deliberately NOT exercised by this project's own automated tests,
+the same reasoning as `pkg/regio.Open`'s real register writes: no
+test run should change the clock of whatever machine runs it.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

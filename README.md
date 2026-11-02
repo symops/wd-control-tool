@@ -17,9 +17,9 @@ config daemon, no message-queue relay, no `/tmp` file polling.
 See `SPEC.md` for the full, reverse-engineered hardware reference
 this implementation follows - including what is still unconfirmed
 or unimplemented. Most MCU commands remain fire-and-forget (no reply
-ever parsed), but two reads are now confirmed and implemented:
-EX2U's temperature (`-t`) and EX2's fan RPM (`-f rpm`) - see SPEC.md,
-"Request/response and acknowledgement".
+ever parsed), but three reads are now confirmed and implemented:
+EX2U's temperature (`-t`), EX2's fan RPM (`-f rpm`) and EX2's RTC
+(`-r r`/`-r s`) - see SPEC.md, "Request/response and acknowledgement".
 
 ## Download
 
@@ -44,7 +44,9 @@ wd-control-tool -b ex2 --led power blue on
 wd-control-tool -b ex4 -f 2                            # EX4: Medium
 wd-control-tool -b ex4 --led power blue on
 wd-control-tool -b ex4 --display "Booting..."
-wd-control-tool -b ex4 -r write                        # push the host's current time to the MCU RTC
+wd-control-tool -b ex4 -r w                            # push the host's current time to the MCU RTC
+wd-control-tool -b ex2 -r r                            # read the MCU RTC and print it
+wd-control-tool -b ex2 -r s                            # read the MCU RTC and set the host's system clock from it
 
 wd-control-tool -b ex2 --led power blue on -f 1        # chain several actions in one command, run in order
 wd-control-tool -b ex4 -n -D --led power blue on       # preview the exact bytes/registers, touch nothing
@@ -87,7 +89,9 @@ fails stops the rest - later actions in the same command never run.
 | `-l`, `--led` | ex2, ex4 | `ZONE COLOR STATE` | zones: `power`, `hd0`, `hd1` (+`hd2`,`hd3` on EX4); colors: `red`, `blue`; states: `on`, `off`, `blinking` (or `blink`). `power` on EX2 is MCU-driven, not `/dev/mem` (hardware-confirmed - see SPEC.md). `hd0`/`hd1`'s `on`/`off` are hardware-confirmed (a real register-page capture); `blinking` on HD-bay and `hd2`/`hd3` (EX4-only, no hardware available to test) have no confirmed register behavior and are reported as an error rather than guessed, same as `blinking` on EX2's power LED. |
 | `-l`, `--led` | ex2u | `STATE` | states: `on`, `off`, `blinking` (or `blink`), `breathing` (or `breathe`) - EX2U's single status LED, not a zone/color scheme. |
 | `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated or paginated at the LCD's own 16-char width - see SPEC.md. Taken verbatim, even if it looks like a flag (e.g. starts with `-`). Max 255 bytes (the wire format's own LEN field is one byte wide), and may not contain a literal 0xFA/0xFB byte or be exactly 250/251 bytes long (the wire protocol's own start/end markers - see SPEC.md); any of these is rejected with an error, not silently sent. |
-| `-r`, `--rtc` | ex4 | `write` | Pushes the host's current time to the MCU RTC. **EX2 not yet implemented** (frame layout unconfirmed); **no board supports reading the RTC back** yet (see SPEC.md). |
+| `-r`, `--rtc` | ex2, ex4 | `w` | Pushes the host's current time to the MCU RTC - hardware-confirmed on both boards (see SPEC.md's "RTC"). |
+| `-r`, `--rtc` | ex2 | `r` | Reads the MCU RTC and prints it (`rtc: RTC time = YYYY/M/D Mon HH:MM:SS`, matching the vendor `rtc -r`'s own wording) - hardware-confirmed. **EX4 not yet implemented** (reply frame unconfirmed - see SPEC.md). |
+| `-r`, `--rtc` | ex2 | `s` | Like `r`, and also sets the host's own system clock from the result - hardware-confirmed for the read; the system-clock-set side effect is not exercised by this project's own automated tests (see BUILDING.md). **EX4 not yet implemented**, same reason as `r`. |
 | `-t`, `--temp` | ex2u | (none) | Sends the `tmp_get` request and prints `Temperature: N C` (hardware-confirmed from one live capture - see SPEC.md's "EX2U protocol"). Prints "no reply" rather than failing if nothing arrives within 2s. Use `-D` to see the raw reply bytes (`debug: reply=...`), same as any other command's `-D` output. |
 
 No generic "all boards" fallback exists anywhere: every command's

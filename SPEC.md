@@ -156,10 +156,12 @@ are described in full; see "Full command tables" for every row):
   sec` order. BCD packing: `((v/10)<<4)|(v%10)`. Worked example -
   `up_send_ctl WDateAndTime 2026 10 31 6 14 5 30` (EX4 row: b4=01,
   b5=00,b6=04,b7=07): **`FA 01 00 04 07 30 05 14 06 31 10 26 FB`**.
-  **EX4 only** - EX2's `RDateAndTime`/`WDateAndTime` share this same
-  dispatch group number (2), but EX2's handler was not independently
-  decompiled and its write-side byte layout is **not confirmed** (see
-  "Unresolved"). Do not assume it matches EX4's.
+  EX2's `RDateAndTime`/`WDateAndTime` share this same dispatch group
+  number (2) but NOT the same header bytes - **now confirmed too**
+  via a live `rtc -w` capture (b4=01,b5=08,b6=02,b7=07 - see "RTC"
+  below for the full worked example and a correction to this table's
+  own b7 column for this row). Same 13-byte shape otherwise, same BCD
+  field order.
 
   The BCD formula above is `((v/10)<<4)|(v%10)` for `v` already known
   to be in its field's valid range (confirmed empirically, not just by
@@ -242,7 +244,15 @@ in `test/data/ex4_commands.txt` for anyone extending this tool:
 | ThermalGet | 03 | 08 | 00 | 00 | 00 | 1 |
 | FanStatusGet | 03 | 09 | 00 | 00 | 00 | 1 |
 | RDateAndTime | 01 | 08 | 01 | 01 | 00 | 2 |
-| WDateAndTime | 01 | 08 | 02 | 01 | 00 | 2 |
+| WDateAndTime | 01 | 08 | 02 | 01\* | 00 | 2 |
+
+\* WDateAndTime's b7 as extracted from the static table (same value
+as RDateAndTime's row) is NOT what's actually transmitted: a live
+`rtc -w` capture shows the real wire byte at that position is `07`
+(see "RTC" below) - the write-side handler overrides this field at
+runtime, the same way `buildValueFrame` overrides B6 for other
+commands. RDateAndTime's own b7=`01` IS what's transmitted (it's a
+fixed request frame, no override) - confirmed by the same capture.
 
 Note EX2's own fan commands (`FanStop`/`FanHalf`/`FanFull`, dispatch
 group **1**, fixed shape) are a *separate* control surface from the
@@ -274,13 +284,17 @@ this tool deliberately does not reimplement or depend on:
 **Consequence for wd-control-tool**: almost every command in this
 tool is fire-and-forget, with no read-back or acknowledgement - a
 known, deliberate limitation, not an oversight (see "Unresolved").
-Two exceptions, both added later via a live capture rather than
+Three exceptions, all added later via a live capture rather than
 decoding the general mechanism above: EX2U's temperature (`-t`,
-"EX2U protocol") and EX2's fan RPM (`-f rpm`, "Fan status
-read-back") - each decodes one specific reply shape it happens to
-share with its own request frame, not the general reply-framing
-problem described above, which remains unsolved for everything
-else.
+"EX2U protocol"), EX2's fan RPM (`-f rpm`, "Fan status read-back")
+and EX2's RTC read (`-r r`/`-r s`, "RTC") - each decodes one specific
+reply shape, not the general reply-framing problem described above,
+which remains unsolved for everything else. The first two share
+their own request's 7-byte shape; `RDateAndTime`'s reply instead
+shares `WDateAndTime`'s 13-byte shape (a *different* command's
+request frame, header echoed back verbatim) - the one case so far
+where a reply's shape wasn't simply "my own request, answer in byte
+5".
 
 ## Fan control
 
@@ -515,19 +529,52 @@ Rides the legacy MCU protocol's `RDateAndTime`/`WDateAndTime`
 commands - see "EX2/EX4 protocol" above. The vendor `rtc` tool itself
 has **no direct `/dev/rtc0` ioctl path** despite that string appearing
 in the binary (dead/unused code, or legacy fallback never exercised);
-every real read/write goes through `up_send_ctl`.
+every real read/write goes through `up_send_ctl`. The real tool's own
+`-h` (EX2, real hardware):
 
-- **Write (SYS -> RTC, `rtc -w`)**: confirmed for EX4 (see
-  `WDateAndTime` above). **Not confirmed for EX2** - EX2 routes both
-  read and write through one dispatch group whose write-side byte
-  layout was not independently decompiled.
-- **Read (RTC -> SYS, `rtc -s` - the direction actually used at boot
-  in both EX2 and EX4's vendor `/init`)**: **not implemented at all**,
-  on either board - it requires parsing the MCU's reply frame, which
-  is the single biggest open item in this whole spec (see
-  "Unresolved"). wd-control-tool can currently only *write* a time to
-  EX4's RTC; it cannot read one back, and cannot sync system time from
-  the RTC the way the vendor's boot sequence did.
+```
+rtc - query and set the hardware clock (RTC)
+Functions:
+  -r    read RTC time and print it
+  -w    read time from system and write to rtc(SYS -> RTC)
+  -s    read time from rtc and write to sys(RTC -> SYS)
+  (also: -b system booting, -l record log, -c +227s/month drift
+  compensation, -d reset to 2014/01/01 00:00:00 - none of these are
+  wired up in wd-control-tool)
+```
+
+`wd-control-tool -r`/`--rtc` mirrors these three letters directly
+(`w`/`r`/`s` - not the full words):
+
+- **Write (SYS -> RTC, `rtc -w`)**: confirmed for **both** EX4 (see
+  `WDateAndTime` above) and EX2. EX2's own live capture (`rtc -w`
+  while the host's system time was 2026-11-02 Mon 13:38:58) resolved
+  the "Unresolved" item below: `FA 01 08 02 07 58 38 13 01 02 11 26
+  FB` - same 13-byte shape as EX4's (`FA b4 b5 b6 b7 <7 BCD fields>
+  FB`), with EX2's own header. **One correction to this spec's own
+  table dump**: B7 here is `07`, not the `01` the table recorded (the
+  same value as `RDateAndTime`'s own row) - the table extraction was
+  wrong for this one field; `RDateAndTime`'s B7=`01` WAS confirmed
+  correct by the same capture.
+- **Read (RTC -> SYS)**: confirmed for **EX2 only** - a live capture
+  of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43) decoded the
+  reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` - the request's own
+  5-byte header echoed back verbatim, followed by the same 7-field
+  BCD payload order the write side uses (`sec,min,hour,dow,dom,mon,
+  year`), confirmed field-by-field against the printed date. This was
+  the single biggest open item in this whole spec (see "Unresolved")
+  - now resolved for EX2. **EX4's own `RDateAndTime` reply has not
+  had the same capture** - do not assume it matches EX2's shape (EX2
+  and EX4 already disagree on `WDateAndTime`'s own header bytes, so
+  there's no reason to assume the reply does carry over either); see
+  `pkg/rtc.ErrEX4ReadNotImplemented`.
+- **Sync (RTC -> SYS, also setting the host's system clock, `rtc
+  -s`)**: for EX2, this is just the read above plus
+  `settimeofday(2)` (`pkg/rtc.SetSystemTime`) - no separate MCU
+  capture needed. The clock-setting side effect itself is real and
+  hardware/OS-affecting, so (unlike every other confirmed behavior in
+  this spec) it is deliberately **not** exercised by this project's
+  own automated tests - see BUILDING.md.
 
 ## Display (EX4 only)
 
@@ -537,25 +584,31 @@ display at all.
 ## Unresolved (tracked here so future work doesn't re-derive it)
 
 1. **The MCU-to-host reply frame format** is mostly still undecoded,
-   with two exceptions now: EX2U's `tmp_get` reply (see "EX2U
-   protocol" above, `wd-control-tool -b ex2u -t`) and EX2's
+   with three exceptions now: EX2U's `tmp_get` reply (see "EX2U
+   protocol" above, `wd-control-tool -b ex2u -t`), EX2's
    `FanStatusGet` reply (see "Fan status read-back" above,
-   `wd-control-tool -b ex2 -f rpm`) - both reuse the same 7-byte
-   `FA .. FB` shape as every request, with the answer in byte 5.
-   Still unknown: the general request/reply correlation mechanism
-   (does every command get a reply, or only reads?), EX2/EX4's other
-   sensor reads (`ThermalGet`/`GetThemister`), RTC read-back (`rtc
-   -s`'s actual direction), any acknowledgement that a write command
-   was received, and the stray trailing byte seen after EX2U's own
-   `tmp_get` reply (possibly an unprompted second reply - needs
-   another capture to confirm). Closing the rest needs either a full
-   decompile of `up_read_daemon`'s `RS232_Read` parsing loop, or (more
-   reliably, per this project's own house rule - proven 3 times now)
-   a live UART capture of a real reply.
-2. **EX2's `WDateAndTime`/`RDateAndTime` write-side frame layout** -
-   header bytes are known (table dump above) but the handler that
-   builds the frame from them was not independently decompiled the
-   way EX4's was.
+   `wd-control-tool -b ex2 -f rpm`) and EX2's `RDateAndTime` reply
+   (see "RTC" above, `wd-control-tool -b ex2 -r r`/`-r s`) - the first
+   two reuse the same 7-byte `FA .. FB` shape as every request, with
+   the answer in byte 5; `RDateAndTime`'s reply is the 13-byte
+   `WDateAndTime` shape instead (request header echoed back, 7 BCD
+   fields where the request had its const+FB). Still unknown: the
+   general request/reply correlation mechanism (does every command
+   get a reply, or only reads?), EX2/EX4's other sensor reads
+   (`ThermalGet`/`GetThemister`), EX4's own `RDateAndTime` reply (do
+   not assume it matches EX2's - see "RTC" above), any
+   acknowledgement that a write command was received, and the stray
+   trailing byte seen after EX2U's own `tmp_get` reply (possibly an
+   unprompted second reply - needs another capture to confirm).
+   Closing the rest needs either a full decompile of
+   `up_read_daemon`'s `RS232_Read` parsing loop, or (more reliably,
+   per this project's own house rule - proven 4 times now) a live
+   UART capture of a real reply.
+2. ~~EX2's `WDateAndTime`/`RDateAndTime` write-side frame layout~~ -
+   **resolved**: a live `rtc -w`/`rtc -r` capture confirmed both
+   (header bytes b4=01,b5=08, b6=01/02 for read/write, b7=01/07
+   respectively - see "RTC" above and this section's own table-dump
+   footnote for the b7 correction).
 3. ~~HD-bay blue LED channel - possible SATA-register involvement~~ -
    **resolved**: a direct register-page capture confirmed hd0/hd1
    blue are plain GPIO bits (25/23) in the same `0xF1018000` page as
