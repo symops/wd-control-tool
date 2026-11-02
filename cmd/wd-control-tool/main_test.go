@@ -701,7 +701,7 @@ func TestRun_RealRun_RTCRead_DebugPrintsRawReplyBytes(t *testing.T) {
 	os.Stdout = origOut
 	out := <-outCh
 
-	if !strings.Contains(out, "debug: reply=FA 01 08 01 01 43 39 13 01 02 11 26 FB") {
+	if !strings.Contains(out, "debug: reply (attempt 1)=FA 01 08 01 01 43 39 13 01 02 11 26 FB") {
 		t.Errorf("stdout=%q, want the raw reply debug line", out)
 	}
 	if !strings.Contains(out, "rtc: RTC time = 2026/11/2 Mon 13:39:43") {
@@ -772,13 +772,20 @@ func TestRun_RealRun_RTCReadAndSync_DecodeFailurePrintsGenericMessage(t *testing
 		applyDone := make(chan error, 1)
 		go func() { applyDone <- a.apply() }()
 
-		fake.ReadFrame(t, 7, 3*time.Second)
-		// Same genuinely-unrecoverable headless tail as
-		// mcu.TestEX2DecodeDateAndTime_RejectsShortOrMalformedReply's
-		// siblings - too short to contain a full 13-byte frame.
-		unrecoverable := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
-		if _, err := fake.Master.Write(unrecoverable); err != nil {
-			t.Fatalf("rtc %q: write fake reply: %v", sub, err)
+		// A decode failure is retried (ex2RTCMaxAttempts) - each
+		// attempt sends its own fresh request, so the fake MCU must
+		// answer every one of them with the same unrecoverable reply
+		// to exhaust every attempt, rather than letting a later
+		// attempt time out into "no reply" instead.
+		for i := 0; i < ex2RTCMaxAttempts; i++ {
+			fake.ReadFrame(t, 7, 3*time.Second)
+			// Same genuinely-unrecoverable headless tail as
+			// mcu.TestEX2DecodeDateAndTime_RejectsShortOrMalformedReply's
+			// siblings - too short to contain a full 13-byte frame.
+			unrecoverable := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+			if _, err := fake.Master.Write(unrecoverable); err != nil {
+				t.Fatalf("rtc %q: write fake reply (attempt %d): %v", sub, i+1, err)
+			}
 		}
 
 		if err := <-applyDone; err != nil {

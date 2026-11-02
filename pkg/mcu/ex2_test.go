@@ -387,41 +387,6 @@ func TestEX2DecodeDateAndTime_RejectsShortOrMalformedReply(t *testing.T) {
 	}
 }
 
-// Mirrors TestEX2_PowerLED_PausesBetweenFrames - confirms
-// ex2RTCRequestSettleDelay actually elapses rather than guarding
-// against a future accidental removal.
-func TestEX2_DateAndTimeReply_PausesBeforeRequest(t *testing.T) {
-	fake := fakemcu.New(t)
-	m := NewEX2(OpenFile(fake.Slave))
-
-	start := time.Now()
-	done := make(chan struct {
-		reply []byte
-		err   error
-	}, 1)
-	go func() {
-		reply, err := m.DateAndTimeReply(3 * time.Second)
-		done <- struct {
-			reply []byte
-			err   error
-		}{reply, err}
-	}()
-
-	fake.ReadFrame(t, 7, 3*time.Second) // drain the request
-	wantReply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
-	if _, err := fake.Master.Write(wantReply); err != nil {
-		t.Fatalf("write fake reply: %v", err)
-	}
-
-	r := <-done
-	if r.err != nil {
-		t.Fatalf("DateAndTimeReply: %v", r.err)
-	}
-	if elapsed := time.Since(start); elapsed < ex2RTCRequestSettleDelay {
-		t.Errorf("DateAndTimeReply took %v end-to-end, want at least %v (the settle delay)", elapsed, ex2RTCRequestSettleDelay)
-	}
-}
-
 func TestEX2_DateAndTimeReply_FlushErrorPropagates(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2(OpenFile(fake.Slave))

@@ -710,6 +710,20 @@ func buildDisplayAction(b board.Board, serialPath string, args []string) (*actio
 // well under a second).
 const ex2RTCReplyTimeout = 2 * time.Second
 
+// ex2RTCMaxAttempts: real-hardware testing found chained rapid-fire
+// "rtc r" actions (six in one command, zero think-time apart)
+// getting a corrupted/undecodable reply after the first one - a
+// single isolated request always worked. A fixed pre-request delay
+// was tried and had ZERO measurable effect (byte-for-byte identical
+// garbled output with or without it - see
+// mcu.(*EX2).DateAndTimeReply's own doc comment), ruling out "the
+// MCU just needs more settle time" as the fix. Retrying the whole
+// request (which re-flushes and re-sends - see sendAndRecv) on a
+// decode failure is more robust than tuning a magic delay against
+// whatever is actually happening on the wire, without needing to
+// understand or guess the exact mechanism.
+const ex2RTCMaxAttempts = 3
+
 // rtcTimeLayout matches the real vendor `rtc` tool's own printed
 // format exactly (confirmed via a live capture: "RTC time =
 // 2026/11/2 Mon 13:39:43") - Go's reference-time layout for
@@ -814,22 +828,36 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 				return err
 			}
 			defer p.Close()
-			reply, err := mcu.NewEX2(p).DateAndTimeReply(ex2RTCReplyTimeout)
-			if err != nil {
-				return err
+
+			// Retries a decode failure (not a "no reply at all", which
+			// returns immediately below - see ex2RTCMaxAttempts) up to
+			// ex2RTCMaxAttempts times; each attempt re-flushes and
+			// re-sends via DateAndTimeReply, not just re-reading
+			// whatever's already buffered.
+			var reply []byte
+			var year, mon, dom, hour, min, sec int
+			var derr error
+			for attempt := 1; ; attempt++ {
+				reply, err = mcu.NewEX2(p).DateAndTimeReply(ex2RTCReplyTimeout)
+				if err != nil {
+					return err
+				}
+				if debug {
+					fmt.Printf("debug: reply (attempt %d)=% X\n", attempt, reply)
+				}
+				if len(reply) == 0 {
+					fmt.Printf("rtc: no reply from MCU within %v\n", ex2RTCReplyTimeout)
+					return nil
+				}
+				year, mon, dom, _, hour, min, sec, derr = mcu.EX2DecodeDateAndTime(reply)
+				if derr == nil || attempt >= ex2RTCMaxAttempts {
+					break
+				}
 			}
-			if debug {
-				fmt.Printf("debug: reply=% X\n", reply)
-			}
-			if len(reply) == 0 {
-				fmt.Printf("rtc: no reply from MCU within %v\n", ex2RTCReplyTimeout)
-				return nil
-			}
-			year, mon, dom, _, hour, min, sec, derr := mcu.EX2DecodeDateAndTime(reply)
 			if derr != nil {
 				// derr's own text embeds the raw reply bytes - not
 				// printed here so -D stays the only way to see them.
-				fmt.Println("rtc: couldn't decode a time from the MCU's reply (run with -D to see the raw bytes)")
+				fmt.Printf("rtc: couldn't decode a time from the MCU's reply after %d attempts (run with -D to see the raw bytes)\n", ex2RTCMaxAttempts)
 				return nil
 			}
 			t := time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.Local)

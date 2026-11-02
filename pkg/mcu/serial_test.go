@@ -250,13 +250,13 @@ func TestPort_RecvBytes_AssemblesReplyArrivingOverMultipleReads(t *testing.T) {
 	}
 }
 
-// The other side of interByteQuietWindow: once a reply genuinely
-// stops (not just a slow byte in transit), recvBytes must not wait
-// out the full outer timeout before returning what it has - that
-// would make every reply as slow as the "nothing ever arrives" case.
-// Writes only a prefix, stays silent, and confirms recvBytes returns
-// well before the 3-second outer timeout (bounded by
-// interByteQuietWindow instead).
+// The other side of readPollInterval: once a reply genuinely stops
+// (not just a slow byte in transit), recvBytes must not wait out the
+// full outer timeout before returning what it has - that would make
+// every reply as slow as the "nothing ever arrives" case. Writes
+// only a prefix, stays silent, and confirms recvBytes returns well
+// before the 3-second outer timeout (bounded by one empty,
+// readPollInterval-bounded Read() instead).
 func TestPort_RecvBytes_ReturnsAfterQuietWindowNotFullTimeout(t *testing.T) {
 	fake := fakemcu.New(t)
 	p := OpenFile(fake.Slave)
@@ -278,6 +278,77 @@ func TestPort_RecvBytes_ReturnsAfterQuietWindowNotFullTimeout(t *testing.T) {
 		t.Fatalf("recvBytes returned %d byte(s), want exactly the %d-byte prefix (no more was ever sent)", n, len(prefix))
 	}
 	if elapsed >= 3*time.Second {
-		t.Errorf("recvBytes took %v, want well under the 3s outer timeout (bounded by interByteQuietWindow instead)", elapsed)
+		t.Errorf("recvBytes took %v, want well under the 3s outer timeout (bounded by readPollInterval instead)", elapsed)
+	}
+}
+
+// CONFIRMED BUG regression test: an earlier design (a fresh goroutine
+// per Read() attempt, including the trailing "is there more" probes -
+// see readPollInterval's own doc comment for the full history) left
+// a goroutine behind whenever such a probe's own short timeout
+// elapsed with nothing new. That abandoned goroutine and a SECOND
+// recvBytes call's own fresh one both ended up blocked on Read()
+// concurrently, and the kernel could deliver the second call's own
+// reply to the first call's abandoned leftover instead - the second
+// call then saw nothing and timed out despite the reply having
+// actually arrived. Calls recvBytes twice in a row on the same Port
+// (mirroring cmd/wd-control-tool/main.go's buildRTCReadAction
+// retrying a decode failure) and confirms the SECOND call gets its
+// own reply, not nothing.
+func TestPort_RecvBytes_SecondCallOnSamePortSeesItsOwnReply(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	first := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB} // same unrecoverable shape used elsewhere in this project
+	if _, err := fake.Master.Write(first); err != nil {
+		t.Fatalf("write first reply: %v", err)
+	}
+	buf1 := make([]byte, 64)
+	n1, err := p.recvBytes(buf1, 3*time.Second)
+	if err != nil {
+		t.Fatalf("first recvBytes: %v", err)
+	}
+	if n1 != len(first) {
+		t.Fatalf("first recvBytes returned %d byte(s), want %d", n1, len(first))
+	}
+
+	second := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	if _, err := fake.Master.Write(second); err != nil {
+		t.Fatalf("write second reply: %v", err)
+	}
+	buf2 := make([]byte, 64)
+	n2, err := p.recvBytes(buf2, 3*time.Second)
+	if err != nil {
+		t.Fatalf("second recvBytes: %v", err)
+	}
+	if n2 != len(second) {
+		t.Fatalf("second recvBytes returned %d byte(s) (% X), want the full %d-byte second reply (% X) - got nothing/wrong-size here is exactly the regression this test guards", n2, buf2[:n2], len(second), second)
+	}
+	if string(buf2[:n2]) != string(second) {
+		t.Errorf("second recvBytes = % X, want % X", buf2[:n2], second)
+	}
+}
+
+// recvBytes' "buffer full" branch had no coverage - every other test
+// writes far fewer bytes than sendAndRecv's own 64-byte buffer.
+// Passes a deliberately small buf instead of changing what's written,
+// and confirms recvBytes stops exactly at buf's own capacity rather
+// than attempting to copy past it (which would panic) or looping
+// forever.
+func TestPort_RecvBytes_StopsAtBufferCapacity(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	if _, err := fake.Master.Write([]byte{0x01, 0x02, 0x03, 0x04}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	buf := make([]byte, 3)
+	n, err := p.recvBytes(buf, 3*time.Second)
+	if err != nil {
+		t.Fatalf("recvBytes: %v", err)
+	}
+	if n != len(buf) {
+		t.Errorf("recvBytes returned %d byte(s), want exactly %d (buf's own capacity)", n, len(buf))
 	}
 }

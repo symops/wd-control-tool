@@ -567,14 +567,17 @@ Functions:
   had the same capture** - do not assume it matches EX2's shape (EX2
   and EX4 already disagree on `WDateAndTime`'s own header bytes, so
   there's no reason to assume the reply does carry over either); see
-  `pkg/rtc.ErrEX4ReadNotImplemented`. **Needs pacing between
-  consecutive requests** - rapid-fire repeated `RDateAndTime`
-  requests (e.g. several `-r r` actions chained with zero think-time
-  in one command) were found to get corrupted/stale replies after
-  the first one; a single isolated request always works. Unlike
-  every other number in this spec, the fix
-  (`ex2RTCRequestSettleDelay`, `pkg/mcu/ex2.go`) is a heuristic pause,
-  not a captured value - see BUILDING.md for why.
+  `pkg/rtc.ErrEX4ReadNotImplemented`. Rapid-fire repeated
+  `RDateAndTime` requests (e.g. several `-r r` actions chained with
+  zero think-time in one command) were found to get corrupted/stale
+  replies after the first one - **not an MCU timing issue**: a fixed
+  pre-request pause had zero measurable effect, and the real cause
+  was a bug on this tool's own side (`Port.recvBytes`,
+  `pkg/mcu/serial.go`, now fixed - see BUILDING.md for the full
+  story). `cmd/wd-control-tool/main.go`'s
+  `buildRTCReadAction` also retries a decode failure a few times as
+  defense in depth, since this protocol still has no checksum or
+  acknowledgement either way.
 - **Sync (RTC -> SYS, also setting the host's system clock, `rtc
   -s`)**: for EX2, this is just the read above plus
   `settimeofday(2)` (`pkg/rtc.SetSystemTime`) - no separate MCU

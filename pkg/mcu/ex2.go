@@ -143,29 +143,27 @@ func (m *EX2) RequestDateAndTime() error {
 	return sendLegacy(m.p, buildFixedFrame(ex2RDateAndTime))
 }
 
-// ex2RTCRequestSettleDelay is a pause before sending RDateAndTime's
-// request, every time, not just when actually chained in rapid
-// succession - same unconditional shape as ex2PowerLEDInterFrameDelay.
-//
-// Unlike this project's other timing constants, this one is NOT a
-// captured, confirmed hardware value - it's a defensive heuristic. A
-// real chained run (six `-r r` actions, zero think-time apart in one
-// process) found the MCU's replies to rapid consecutive
-// RDateAndTime requests becoming corrupted/stale after the first one
-// (a single isolated request always worked - see BUILDING.md for
-// the full capture). This protocol has no checksum or
-// acknowledgement at all (same reasoning as
-// ex2PowerLEDInterFrameDelay), so nothing but timing protects a
-// second request from landing while the MCU is still settling from
-// the first.
-const ex2RTCRequestSettleDelay = 300 * time.Millisecond
-
 // DateAndTimeReply sends RDateAndTime's request and returns whatever
 // raw bytes the MCU replies with within timeout - possibly none.
 // Deliberately returns the UNDECODED bytes; see EX2DecodeDateAndTime
 // for the decode, same split as FanStatusReply/EX2DecodeFanRPM.
+//
+// A fixed pre-request delay was tried here first (ex2RTCRequestSettleDelay,
+// 300ms, since removed) after real-hardware testing found chained
+// rapid-fire RDateAndTime requests (six `-r r` actions, zero
+// think-time apart) getting corrupted/stale replies after the first
+// one. It had ZERO measurable effect - a repeat of the exact same
+// test produced byte-for-byte identical garbled output before and
+// after adding it, ruling out "the MCU just needs more settle time".
+// The real cause turned out to be on THIS side, not the MCU's: a bug
+// in Port.recvBytes (pkg/mcu/serial.go) that could hand one request's
+// reply to a different, already-abandoned read attempt from an
+// earlier one - fixed there directly (see readPollInterval's own doc
+// comment for the full story). cmd/wd-control-tool/main.go's
+// buildRTCReadAction also retries a decode failure a few times as
+// defense in depth, since this protocol still has no checksum or
+// acknowledgement of its own either way.
 func (m *EX2) DateAndTimeReply(timeout time.Duration) ([]byte, error) {
-	time.Sleep(ex2RTCRequestSettleDelay)
 	return m.p.sendAndRecv(m.RequestDateAndTime, timeout)
 }
 

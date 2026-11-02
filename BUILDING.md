@@ -421,17 +421,64 @@ After that fix shipped, chaining six `-r r` actions in one command
 first request got a clean reply - every one after it came back
 corrupted/stale (fragments with no fresh header at all, several of
 them byte-for-byte identical to each other), while a single isolated
-`-r r` always worked. Unlike every other fix in this project, this
-one is NOT pinned to a specific decoded capture - the user who found
-it asked for a heuristic pacing fix directly rather than a further
-capture-and-diagnose round. Added `ex2RTCRequestSettleDelay` (300ms,
-same unconditional-every-time shape as `ex2PowerLEDInterFrameDelay`,
-and the same underlying reasoning: this protocol has no checksum or
-acknowledgement at all, so nothing but timing protects a second
-request from landing while the MCU is still settling from the
-first) - a defensive heuristic, explicitly not a confirmed hardware
-value, called out as such in its own doc comment so a future reader
-doesn't mistake it for one.
+`-r r` always worked. First response: a fixed pre-request pause
+(`ex2RTCRequestSettleDelay`, 300ms, same shape as
+`ex2PowerLEDInterFrameDelay`) - at the user's own request, rather
+than another capture-and-diagnose round. It had **zero measurable
+effect**: a repeat of the exact same chained-six-reads test produced
+byte-for-byte identical garbled output before and after adding it.
+That result itself was the real clue - a genuine MCU settle-time fix
+would have shifted *something*, so the cause had to be on this
+tool's own side, not the MCU's.
+
+It was: `Port.recvBytes` (`pkg/mcu/serial.go`) spawned a fresh
+goroutine calling `Read()` for every attempt at assembling a
+multi-byte reply, including the short trailing "is there more"
+probes added for the EARLIER truncated-reply fix (see above). When
+such a probe's own short timeout elapsed with nothing new, its
+goroutine was left behind still blocked on `Read()` - harmless in
+isolation (this tool exits right after one action), but retrying a
+request on the SAME `Port` (exactly what the EX2 RTC retry logic in
+`cmd/wd-control-tool/main.go`'s `buildRTCReadAction` does, and what a
+chain of separate actions sharing one `--serial` path does too, each
+opening a fresh `Port` on the same physical device) could leave TWO
+goroutines blocked on `Read()` at once - the kernel delivered the
+next reply to WHICHEVER one it felt like, and that was reliably the
+abandoned one, not the new call actually waiting for it. Reproduced
+deterministically with a fake MCU
+(`TestPort_RecvBytes_SecondCallOnSamePortSeesItsOwnReply`), not just
+inferred from the real-hardware symptom.
+
+The first fix attempt for THIS bug - one single persistent reader
+goroutine per `Port` instead of one per read attempt, with `Close`
+waiting for it to actually exit before returning - closed that race
+but introduced a worse one: running the SAME test against a `Port`
+with real termios settings applied (`CLOCAL`/`CREAD`/raw via
+`TCSETS`, not a bare default pty) showed `Close` does **not**
+reliably unblock a goroutine already parked in `Read()` on it -
+confirmed directly (a small standalone reproduction: close from one
+goroutine while another is blocked in `Read()` on the exact same
+fd), not assumed. `Close` waiting for that goroutine would have hung
+the whole CLI the first time two actions shared one `--serial` path
+(reproduced as an actual test timeout, not a theory).
+
+The fix that stuck: `Open` now configures `VMIN=0`/`VTIME=1` (not
+`VMIN=1`/`VTIME=0`) - with `VMIN=0`, every `Read()` call is bounded
+by the kernel itself (returns after ~100ms with nothing, or
+immediately with whatever's available), so `recvBytes` can just loop
+calling `Read()` directly, synchronously, with no goroutine ever
+left blocked on anything and nothing for `Close` to wait for.
+`test/fakemcu`'s own `setRaw` was updated to the same `VMIN`/`VTIME`
+values, since a fake pty under the OLD config wouldn't exercise the
+same blocking behavior real hardware now does. See
+`pkg/mcu/serial.go`'s `readPollInterval` doc comment for the full
+three-attempts history in one place.
+
+`cmd/wd-control-tool/main.go`'s `buildRTCReadAction` still retries a
+decode failure a few times (`ex2RTCMaxAttempts`) as defense in depth
+- this protocol has no checksum or acknowledgement at all, so a
+genuinely corrupted reply (for whatever reason) is still possible in
+principle, even with the actual bug fixed.
 
 ## What this does NOT cover
 

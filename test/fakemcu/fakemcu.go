@@ -49,8 +49,16 @@ func setRaw(f *os.File) error {
 	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
 	raw.Cflag &^= unix.CSIZE | unix.PARENB
 	raw.Cflag |= unix.CS8
-	raw.Cc[unix.VMIN] = 1
-	raw.Cc[unix.VTIME] = 0
+	// VMIN=0/VTIME=1 (100ms), matching mcu.Open's own real-device
+	// config exactly (see pkg/mcu/serial.go's readPollInterval) - not
+	// VMIN=1/VTIME=0. A fake pty under that older config was how
+	// mcu.(*Port).Close's inability to reliably unblock a goroutine
+	// already parked in Read() on a REAL device's termios was first
+	// reproduced at all: this field must track Open's own VMIN/VTIME
+	// choice exactly, or this harness would exercise different
+	// blocking behavior than what real hardware actually does.
+	raw.Cc[unix.VMIN] = 0
+	raw.Cc[unix.VTIME] = 1
 	return unix.IoctlSetTermios(int(f.Fd()), unix.TCSETS, &raw)
 }
 

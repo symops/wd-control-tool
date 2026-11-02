@@ -27,6 +27,10 @@ var baudToTermios = map[int]uint32{
 // regio.Mem's Close not taking its own mutex), even though nothing in
 // this project's own CLI currently shares one Port across goroutines
 // (run() dispatches actions sequentially).
+//
+// Reading (recvBytes) is a plain synchronous p.f.Read() loop, no
+// background goroutine at all - see readPollInterval's doc comment
+// for why that took two wrong designs to get right.
 type Port struct {
 	mu sync.Mutex
 	f  *os.File
@@ -61,6 +65,11 @@ func Open(path string, baud int) (*Port, error) {
 	// "frame sent with no I/O error, MCU never responds": the bytes
 	// went out at the wrong bit rate, so the MCU's UART never saw a
 	// valid frame, let alone a complete one.
+	// VMIN=0, VTIME=readPollIntervalDeciseconds: NOT VMIN=1/VTIME=0 -
+	// see readPollInterval's own doc comment for why a Read() that can
+	// block forever (the VMIN=1/VTIME=0 this project used until it
+	// caused two separate confirmed bugs) was replaced with one that's
+	// always bounded by the kernel itself.
 	t := unix.Termios{
 		Iflag:  0,
 		Oflag:  0,
@@ -69,8 +78,8 @@ func Open(path string, baud int) (*Port, error) {
 		Ispeed: b,
 		Ospeed: b,
 	}
-	t.Cc[unix.VMIN] = 1
-	t.Cc[unix.VTIME] = 0
+	t.Cc[unix.VMIN] = 0
+	t.Cc[unix.VTIME] = readPollIntervalDeciseconds
 	if err := unix.IoctlSetTermios(int(f.Fd()), unix.TCSETS, &t); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("mcu: configure %s: %w", path, err)
@@ -82,7 +91,9 @@ func Open(path string, baud int) (*Port, error) {
 // OpenFile wraps an already-open file (a test PTY, typically) as a
 // Port without touching termios - used by test/fakemcu so tests can
 // exercise the exact same frame-building/pacing code against a fake
-// MCU on the other end of a PTY pair.
+// MCU on the other end of a PTY pair. The fd's own termios (VMIN/
+// VTIME included) must already be configured the same way Open's own
+// is - test/fakemcu's setRaw does this.
 func OpenFile(f *os.File) *Port { return &Port{f: f} }
 
 func (p *Port) Close() error {
@@ -196,29 +207,54 @@ func (p *Port) sendAndRecv(send func() error, timeout time.Duration) ([]byte, er
 	return buf[:n], nil
 }
 
-// interByteQuietWindow is how long recvBytes waits for one MORE byte
-// after at least one has already arrived, before deciding a reply is
-// complete rather than still arriving.
+// readPollIntervalDeciseconds (and readPollInterval, its time.Duration
+// form) is Open's VTIME value: with VMIN=0, each p.f.Read() call
+// blocks for AT MOST this long, returning (0, io.EOF) if nothing
+// arrived, or whatever's available (without waiting for more) the
+// moment even one byte does. recvBytes (below) calls Read() in a
+// plain loop, using this same bound both as "how long to wait for
+// the very first byte of a reply" (looped, against the caller's own
+// overall timeout) and as "how long a gap since the last byte means
+// the reply is done" (one empty Read() after at least one
+// successful one) - no separate quiet-window timer needed, the
+// kernel already gives one for free.
 //
-// Needed because Open configures VMIN=1/VTIME=0, so a single Read()
-// call returns as soon as just one byte is available - it does NOT
-// wait for a longer reply to finish arriving. Confirmed to actually
-// bite in practice, not just in theory: a real EX2 RDateAndTime
-// reply (13 bytes) was caught truncated to 8 bytes in a user's own
-// -D capture on real hardware (`reply=FA 01 08 01 01 47 12 14`, no
-// trailing FB) - EX2DecodeDateAndTime correctly refused to decode
-// the genuinely incomplete frame rather than guess, but the real fix
-// is here: keep reading instead of settling for whatever one Read()
-// happened to return.
+// This replaces TWO earlier, wrong designs, both confirmed broken by
+// real testing, not just in theory:
 //
-// Unlike this project's other timing constants, this one is NOT a
-// captured, confirmed hardware value - it's a heuristic margin,
-// chosen generous (tens of milliseconds) against the sub-millisecond
-// inter-byte gaps this project HAS captured (see
-// legacyInterByteDelay, and the strace timestamps in SPEC.md/
-// BUILDING.md), to also cover Go-scheduling/OS jitter on whatever
-// machine runs this tool, which no capture can bound precisely.
-const interByteQuietWindow = 50 * time.Millisecond
+//  1. VMIN=1/VTIME=0 (block until ANY byte, no kernel-side timeout at
+//     all) + a goroutine-and-channel wrapper for the Go-level
+//     timeout this needed. A single such Read() returning as soon as
+//     one byte arrived (not waiting for a longer reply to finish)
+//     truncated a real 13-byte EX2 RDateAndTime reply to 8 bytes in a
+//     user's own -D capture on real hardware.
+//  2. Fixed by looping multiple goroutine+channel reads with a short
+//     Go-level "quiet window" between them - but each short read
+//     that timed out left its own goroutine behind, still blocked on
+//     Read(). Harmless in isolation, but a Port reused for a SECOND
+//     request/reply cycle (retrying a failed decode - see
+//     cmd/wd-control-tool/main.go's buildRTCReadAction) could have
+//     TWO goroutines blocked on Read() at once, and the kernel could
+//     deliver the second cycle's reply to the FIRST cycle's abandoned
+//     goroutine instead - reproduced deterministically with a fake
+//     MCU. A single persistent reader goroutine (one per Port, tried
+//     next) closed that race, but running real-hardware termios
+//     settings (CLOCAL/CREAD/raw, not a bare pty) through Port.Close
+//     showed closing the fd does NOT reliably unblock a goroutine
+//     already parked in Read() on it - confirmed directly, not
+//     assumed: a close() from another goroutine on a freshly
+//     TCSETS-configured pty left that Read() still blocked 2+ seconds
+//     later, unlike the same test against an unconfigured pty. Close
+//     waiting for that goroutine to exit would have hung the whole
+//     CLI the first time two actions shared one --serial path.
+//
+// VMIN=0/VTIME=N sidesteps both: every Read() call is bounded by the
+// kernel itself, so there is never a goroutine left blocked on one,
+// and nothing for Close to wait for.
+const (
+	readPollIntervalDeciseconds = 1 // 100ms - TCSETS' VTIME unit
+	readPollInterval            = time.Duration(readPollIntervalDeciseconds) * 100 * time.Millisecond
+)
 
 // recvBytes reads a reply within timeout. Zero bytes with a nil
 // error is a normal "nothing arrived in time" outcome, not a failure
@@ -230,72 +266,26 @@ const interByteQuietWindow = 50 * time.Millisecond
 // that), same as it would for a genuinely undecoded reply. A non-nil
 // error means the read itself failed.
 //
-// Loops across multiple Read() calls via readOnce, not just one -
-// see interByteQuietWindow's doc comment for why one Read() isn't
-// enough to reliably capture a reply longer than a single byte.
-// After the first byte(s) arrive, each subsequent readOnce uses
-// interByteQuietWindow instead of the caller's own timeout - once
-// that elapses with nothing new, or buf fills, the reply is
-// considered complete.
+// Loops p.f.Read() directly - see readPollInterval's own doc comment
+// for why that's safe here (each call is kernel-bounded) when it
+// would not have been under this project's older VMIN=1/VTIME=0
+// configuration.
 func (p *Port) recvBytes(buf []byte, timeout time.Duration) (int, error) {
-	total, err := p.readOnce(buf, timeout)
-	if err != nil || total == 0 {
-		return total, err
-	}
-	for total < len(buf) {
-		n, err := p.readOnce(buf[total:], interByteQuietWindow)
-		if err != nil {
-			return total, err
+	total := 0
+	deadline := time.Now().Add(timeout)
+	for {
+		n, err := p.f.Read(buf[total:])
+		total += n
+		if err != nil && err != io.EOF {
+			return total, fmt.Errorf("mcu: read: %w", err)
+		}
+		if total >= len(buf) {
+			return total, nil
 		}
 		if n == 0 {
-			break
+			if total > 0 || !time.Now().Before(deadline) {
+				return total, nil
+			}
 		}
-		total += n
-	}
-	return total, nil
-}
-
-// readOnce is recvBytes' single-Read() building block, factored out
-// so it can be called both for the initial "wait for anything at
-// all" read (the caller's own timeout) and for each subsequent "is
-// there more" read (interByteQuietWindow).
-//
-// Open configures VMIN=1/VTIME=0, so the underlying Read blocks
-// until at least one byte is available - there is no kernel-level
-// per-read timeout to lean on. (*os.File).SetReadDeadline was ruled
-// out for this exact reason on a pty master in this project before
-// (see test/fakemcu's readExactly) and a real tty fd gives no
-// stronger guarantee, so the same goroutine+select pattern is used
-// here: the Read runs in its own goroutine and the timeout is
-// enforced with select/time.After regardless of whether the fd
-// honors a deadline.
-//
-// A timeout leaves that goroutine blocked on Read past this call's
-// return - harmless for this tool's one-action-per-process CLI usage
-// (the process exits right after run() returns, taking the goroutine
-// with it), but calling recvBytes again on the same Port before an
-// earlier timed-out Read has actually returned risks two concurrent
-// Reads racing for the same incoming bytes - same risk this already
-// carried before recvBytes looped internally, just now also possible
-// between recvBytes' own internal readOnce calls if a caller reuses
-// a Port concurrently, which nothing in this project's own CLI does.
-func (p *Port) readOnce(buf []byte, timeout time.Duration) (int, error) {
-	type result struct {
-		n   int
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		n, err := p.f.Read(buf)
-		ch <- result{n, err}
-	}()
-	select {
-	case r := <-ch:
-		if r.err != nil && r.err != io.EOF {
-			return r.n, fmt.Errorf("mcu: read: %w", r.err)
-		}
-		return r.n, nil
-	case <-time.After(timeout):
-		return 0, nil
 	}
 }
