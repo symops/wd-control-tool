@@ -579,17 +579,48 @@ vendor tool directly, not by reasoning about it.
   other rtc subcommand), found via a direct side-by-side with the
   vendor tool. **A `RDateAndTime` read immediately following a
   `WDateAndTime` write can intermittently come back with some
-  fields right (sec/min/hour, freshly written) and others wrong**
-  (dow/dom/mon/year mixed up or stale) - repeated real-hardware
-  testing (`rtc r`+`rtc w`+`rtc s` chained, many attempts, several
-  seconds apart) showed this reproduces every few attempts, and once
-  wrong, the SAME wrong value kept reappearing on independent
-  subsequent reads until the next write. The reply frame itself is
-  always well-formed - this points at a race inside the MCU's own
-  firmware between its `WDateAndTime` and `RDateAndTime` handlers,
-  not at anything on this tool's own side. Mitigated with
-  `ex2RTCPostWriteSettleDelay` (`pkg/rtc/rtc.go`) - a defensive pause
-  after a successful write, not a confirmed hardware value.
+  fields right and others wrong** - repeated real-hardware testing
+  (`rtc r`+`rtc w`+`rtc s` chained, many attempts, several seconds
+  apart) showed this reproduces every few attempts. **Root cause
+  CONFIRMED** (not just suspected) via this project's own
+  `WD_MCU_TRACE` byte-level tracing (`pkg/mcu/serial.go` -
+  deliberately not `strace`: wrapping the whole CLI in `strace` to
+  capture this made the corruption stop reproducing across 3 full
+  50-iteration runs, almost certainly `strace`'s own per-syscall
+  overhead giving the race more breathing room than real use ever
+  has - so a lightweight in-process trace was added instead, with no
+  ptrace involved): a real capture showed `sec`/`min` read live off
+  the RTC chip every time, while `hour`/`dow`/`dom`/`mon`/`year` were
+  FROZEN at a stale, well-formed snapshot across two separate reads
+  1.3s apart (from two separate process invocations), with `sec`
+  ticking forward normally between them - and this tool's own
+  flush/send/recv sequence around both reads was completely clean (0
+  bytes pending at flush, one well-formed frame, matching header),
+  ruling out anything on this tool's own side (in particular: no
+  unread `WDateAndTime` reply left lingering in the kernel's RX
+  queue to contaminate the next read - there never was a reply at
+  all, nothing came back after a write until the fix below added a
+  deliberate readback). The SAME trace shows the very next
+  `WDateAndTime` write immediately clears the freeze - confirming
+  this is a genuine bug in the MCU firmware's own RTC-read
+  composition, not a transport/timing issue: a flat 300ms pause (two
+  different placements, both since reverted) and inter-byte write
+  pacing up to 10ms/byte - 1000x the vendor's own 10us, also since
+  reverted - were both tried on real hardware first and had zero
+  effect on the failure rate. **Fixed** (not just mitigated) in
+  `(*mcu.EX2).SetDateAndTime` (`pkg/mcu/ex2.go`,
+  `ex2RTCVerifyAttempts`): since a write is what clears the freeze,
+  every write now reads straight back what it just sent (so it knows
+  the exact expected value, not a guessed "plausible" one) and
+  re-sends the write if the readback doesn't match, up to 3
+  attempts - this does NOT reintroduce the implausible-year sanity
+  check rejected earlier (that one risked misdiagnosing a genuinely
+  dead RTC battery as corruption): it only ever compares against a
+  value this same call just wrote, never against an absolute
+  plausibility threshold, so a standalone read with no preceding
+  write in the same process (e.g. a cold `rtc -s` at boot) is
+  unprotected by this fix and must be treated as a separate,
+  currently-open risk - see "Unresolved" below.
 - **Read (RTC -> SYS)**: confirmed for **EX2 only** - a live capture
   of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43) decoded the
   reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` - the request's own
@@ -669,6 +700,17 @@ display at all.
    (EX2/EX4)", "Power LED".)
 6. EX2U's `sys_reboot` byte sequence was never captured (see EX2U
    protocol table) - do not guess it if ever needed.
+7. **EX2's `RDateAndTime` stale-snapshot bug, standalone-read case**:
+   a write-then-verify fix now exists for `SetDateAndTime` itself
+   (see "RTC" above, `ex2RTCVerifyAttempts`), but a bare read with no
+   preceding write in the SAME process (e.g. a cold `rtc -s` at boot,
+   or any read by a completely different program after an earlier,
+   unrelated write) has no defense: this tool cannot locally tell a
+   genuinely stale MCU snapshot apart from a genuinely old RTC value
+   (e.g. a dead battery) without guessing at plausibility, which was
+   deliberately rejected once already (see BUILDING.md) for risking
+   exactly that misdiagnosis. Not fixed - a real limitation of this
+   approach, not an oversight.
 
 ## Author
 

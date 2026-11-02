@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/symops/wd-control-tool/pkg/board"
+	"github.com/symops/wd-control-tool/pkg/mcu"
 	"github.com/symops/wd-control-tool/pkg/rtc"
 	"github.com/symops/wd-control-tool/test/fakemcu"
 )
@@ -541,6 +542,25 @@ func TestRun_RTCWrite_DryRunOnEX2(t *testing.T) {
 // -D's frame preview matches the bytes actually sent - same
 // regression this project already guards for EX4
 // (TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted).
+// answerEX2RTCVerifyRead answers the RDateAndTime read EX2's own
+// SetDateAndTime now issues right after writing, to verify the write
+// took (see pkg/mcu's ex2RTCVerifyAttempts) - with a reply matching
+// the write frame wireFrame that was just sent (same 7-field BCD
+// payload, RDateAndTime's own B6/B7 header instead of
+// WDateAndTime's), so the caller's apply() succeeds.
+func answerEX2RTCVerifyRead(t *testing.T, fake *fakemcu.Fake, wireFrame []byte) {
+	t.Helper()
+	gotReq := fake.ReadFrame(t, 7, 3*time.Second)
+	if wantReq := mcu.EX2DateTimeRequestFrame(); !bytes.Equal(gotReq, wantReq) {
+		t.Fatalf("verify request frame = % X, want % X", gotReq, wantReq)
+	}
+	reply := append([]byte(nil), wireFrame...)
+	reply[3], reply[4] = 0x01, 0x01
+	if _, err := fake.Master.Write(reply); err != nil {
+		t.Fatalf("write fake verify reply: %v", err)
+	}
+}
+
 func TestRun_RTCWrite_EX2_RealRunSendsCorrectFrame(t *testing.T) {
 	fake := fakemcu.New(t)
 
@@ -565,11 +585,14 @@ func TestRun_RTCWrite_EX2_RealRunSendsCorrectFrame(t *testing.T) {
 	go func() { done <- a.apply() }()
 
 	got := fake.ReadFrame(t, 13, 3*time.Second)
-	if err := <-done; err != nil {
-		t.Fatalf("apply: %v", err)
-	}
 	if gotLine := fmt.Sprintf("frame=% X", got); gotLine != wantFrameLine {
 		t.Errorf("wire bytes %q != debug preview %q", gotLine, wantFrameLine)
+	}
+
+	answerEX2RTCVerifyRead(t, fake, got)
+
+	if err := <-done; err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 }
 
@@ -616,6 +639,9 @@ func TestRun_RealRun_RTCWrite_PrintsSystemTimeLine(t *testing.T) {
 		go func() { applyDone <- a.apply() }()
 
 		got := fake.ReadFrame(t, 13, 3*time.Second)
+		if tc.board == board.EX2 {
+			answerEX2RTCVerifyRead(t, fake, got)
+		}
 		if err := <-applyDone; err != nil {
 			t.Fatalf("%v: apply: %v", tc.board, err)
 		}

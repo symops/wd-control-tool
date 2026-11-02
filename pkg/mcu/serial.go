@@ -10,6 +10,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// mcuTrace and traceEvent: DIAGNOSTIC ONLY, not a permanent feature.
+// Gated behind WD_MCU_TRACE so normal runs pay nothing. Added for the
+// EX2 RTC write-then-read corruption investigation (see BUILDING.md):
+// wrapping the whole CLI in strace to capture the wire traffic around
+// a real failure made the failure stop reproducing (strace's own
+// per-syscall overhead), so this logs each actual write()/read() this
+// process makes directly - no ptrace, no extra syscalls beyond an
+// os.Stderr write, to see the real timing/bytes without masking the
+// race it's trying to catch.
+var mcuTrace = os.Getenv("WD_MCU_TRACE") != ""
+
+func traceEvent(format string, args ...any) {
+	if !mcuTrace {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[mcu %s] "+format+"\n",
+		append([]any{time.Now().Format("15:04:05.000000")}, args...)...)
+}
+
 // baudToTermios maps the handful of baud rates this board family
 // actually uses to their termios Bxxxxx constants. Confirmed by RE:
 // EX2U uart1 = 19200; EX2 /dev/ttyS1 = 115200; EX4 /dev/ttyS1 = 19200.
@@ -115,6 +134,7 @@ func (p *Port) Close() error {
 func (p *Port) sendBytes(b []byte, pace func()) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	traceEvent("send % X", b)
 	for _, c := range b {
 		if _, err := p.f.Write([]byte{c}); err != nil {
 			return fmt.Errorf("mcu: write: %w", err)
@@ -179,6 +199,17 @@ func findFrame(buf []byte, header []byte, frameLen int) ([]byte, error) {
 // TCIOFLUSH/TCOFLUSH sometimes are on other OSes, so it's passed as
 // a literal here.
 func (p *Port) flushInput() error {
+	if mcuTrace {
+		// 0x541B (FIONREAD) - not exported by this project's
+		// golang.org/x/sys/unix version, same reasoning as tcIFlush
+		// below: this is the generic Linux ioctl number, true for
+		// every architecture this project builds for (arm/armv7,
+		// arm/armv5), not a magic guess.
+		const fionread = 0x541B
+		if pending, err := unix.IoctlGetInt(int(p.f.Fd()), fionread); err == nil {
+			traceEvent("flush: %d byte(s) pending", pending)
+		}
+	}
 	const tcIFlush = 0
 	if err := unix.IoctlSetInt(int(p.f.Fd()), unix.TCFLSH, tcIFlush); err != nil {
 		return fmt.Errorf("mcu: flush input: %w", err)
@@ -275,6 +306,13 @@ func (p *Port) recvBytes(buf []byte, timeout time.Duration) (int, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		n, err := p.f.Read(buf[total:])
+		if mcuTrace {
+			if n > 0 {
+				traceEvent("recv n=%d total=%d buf=% X err=%v", n, total+n, buf[total:total+n], err)
+			} else {
+				traceEvent("recv n=0 total=%d err=%v", total, err)
+			}
+		}
 		total += n
 		if err != nil && err != io.EOF {
 			return total, fmt.Errorf("mcu: read: %w", err)

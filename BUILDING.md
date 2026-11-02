@@ -555,6 +555,78 @@ project's side at all, and also answers whether crossing a real
 process boundary (not just elapsed time) matters, since the vendor
 can never NOT cross one between actions.
 
+That comparison ran next: the vendor `rtc` binary run DIRECTLY (not
+via its own `ex2.sh` wrapper), 50 iterations of `r`+`w`+`s` with zero
+sleep between the three and a real process boundary between each
+(exactly this tool's own worst case) - **100% clean, zero
+corruption**, every single run. This disproved "purely an MCU race
+nothing can be done about" - if it were, the vendor would hit it too
+at the same rate, and it never did. Meanwhile, `wd-control-tool` run
+the identical way (three separate invocations, 1s between iterations,
+50 iterations) still failed ~5-10 times per 50, ruling out "crossing
+a process boundary" as the trigger on its own (the vendor crosses one
+every time and stays clean) - something about what THIS tool does
+differently from the vendor's own tool was still the open question.
+
+Two more things were tried and ALSO disproven before the real cause
+was found, both still chasing "the MCU just needs more settle time":
+inter-byte write pacing raised from the vendor-matching 10us up to
+10ms/byte (1000x, via a temporary `WD_LEGACY_BYTE_DELAY_US`
+diagnostic env var, since removed) had zero effect on the failure
+rate even at that extreme; and wrapping the whole reproduction in
+`strace` (to capture the exact wire bytes around a real failure
+without guessing) made the corruption **stop reproducing entirely**
+across 3 full 50-iteration runs - not evidence the bug was fixed, but
+evidence `strace`'s own per-syscall tracing overhead was itself
+perturbing the timing enough to mask the very thing being measured,
+so the capture had to happen WITHOUT `strace`.
+
+The fix for that: `WD_MCU_TRACE`, a lightweight in-process trace (no
+ptrace, no extra syscalls beyond a stderr write) gated behind an env
+var, added directly to `pkg/mcu/serial.go` (`sendBytes`,
+`recvBytes`, `flushInput` - the last one also now logs how many
+bytes `FIONREAD` reports pending right before every flush, to check
+for stale buffered data directly rather than inferring it). Run
+without `strace`, this finally captured the actual failure byte-for-
+byte. The decoded corrupted frame
+(`FA 01 08 01 01 20 29 01 02 11 10 01 FB`) against what had just been
+written (`sec=20,min=29,hour=20,dow=01,dom=02,mon=11,year=26`) showed
+`sec`/`min` exactly right while `hour`/`dow`/`dom`/`mon`/`year` were a
+DIFFERENT, internally well-formed stale snapshot
+(`hour=01,dow=02,dom=11,mon=10,year=01`) - and the trace around both
+the write and the read immediately before it showed `flush: 0
+byte(s) pending` and a single clean 13-byte frame each time: this
+tool's own transport was doing nothing wrong. The SAME wrong
+`hour`/`dow`/`dom`/`mon`/`year` snapshot reappeared, byte-for-byte
+identical, on the NEXT read 1.3s later (`sec` ticking forward
+normally in between) from a completely separate process invocation -
+and the write right after that cleared it, the following read coming
+back correct. This is conclusive: EX2's MCU firmware reads `sec`/
+`min` live off the RTC chip on every `RDateAndTime` request, but
+caches/freezes `hour`/`dow`/`dom`/`mon`/`year` separately in a way
+that sometimes doesn't refresh, and only a `WDateAndTime` write
+resets that cache - a genuine MCU-firmware bug, not a transport
+timing issue (consistent with why neither pacing attempt helped: the
+MCU was never waiting on bytes, it was serving stale cached fields no
+matter how the request arrived).
+
+Since a write is the one thing confirmed to clear the freeze,
+`(*EX2).SetDateAndTime` (`pkg/mcu/ex2.go`) now reads straight back
+what it just wrote and re-sends the write if the readback doesn't
+match (`ex2RTCVerifyAttempts`, 3 tries) - this works specifically
+because, unlike any general read, the write call KNOWS the exact
+value it just sent and can check against it exactly, rather than
+guessing at a "plausible" date. That is the key difference from the
+implausible-year sanity-check/retry idea rejected earlier in this
+investigation (see above): that one would have mistaken a genuinely
+dead RTC battery's old-but-real value for corruption; this one only
+ever compares against a value this same call just wrote, so it can
+never misfire on a standalone read. The flip side: a standalone read
+with no preceding write in the same process (a cold `rtc -s` at
+boot, in particular) has no such ground truth available and remains
+unprotected - tracked as open in SPEC.md's "Unresolved" rather than
+guessed at.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

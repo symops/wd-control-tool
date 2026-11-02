@@ -101,6 +101,29 @@ func TestErrEX4ReadNotImplemented(t *testing.T) {
 	}
 }
 
+// answerEX2RTCVerifyRead answers the RDateAndTime read that EX2's
+// SetDateAndTime now issues right after writing, to verify the write
+// took (see pkg/mcu's ex2RTCVerifyAttempts) - with a reply matching
+// what was just written, so the caller's Set() succeeds. Built by
+// taking EX2DateTimeFrame's own WDateAndTime frame and swapping in
+// RDateAndTime's header bytes (B6/B7), since the reply's 7-field BCD
+// payload uses the identical sec..year layout either way.
+func answerEX2RTCVerifyRead(t *testing.T, fake *fakemcu.Fake, year, mon, dom, dow, hour, min, sec int) {
+	t.Helper()
+	gotReq := fake.ReadFrame(t, 7, 3*time.Second)
+	if wantReq := mcu.EX2DateTimeRequestFrame(); !bytes.Equal(gotReq, wantReq) {
+		t.Fatalf("verify request frame = % X, want % X", gotReq, wantReq)
+	}
+	reply, err := mcu.EX2DateTimeFrame(year, mon, dom, dow, hour, min, sec)
+	if err != nil {
+		t.Fatalf("EX2DateTimeFrame: %v", err)
+	}
+	reply[3], reply[4] = 0x01, 0x01 // RDateAndTime's B6/B7, not WDateAndTime's
+	if _, err := fake.Master.Write(reply); err != nil {
+		t.Fatalf("write fake verify reply: %v", err)
+	}
+}
+
 func TestEX2Writer_Set(t *testing.T) {
 	fake := fakemcu.New(t)
 	w := EX2Writer{MCU: mcu.NewEX2(mcu.OpenFile(fake.Slave))}
@@ -113,16 +136,21 @@ func TestEX2Writer_Set(t *testing.T) {
 	go func() { done <- w.Set(when) }()
 
 	got := fake.ReadFrame(t, 13, 3*time.Second)
-	if err := <-done; err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
 	want, err := mcu.EX2DateTimeFrame(2026, 11, 2, 1, 13, 38, 58)
 	if err != nil {
 		t.Fatalf("EX2DateTimeFrame: %v", err)
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+
+	// EX2's SetDateAndTime reads straight back after writing, to
+	// verify it took (see pkg/mcu's ex2RTCVerifyAttempts) - answer
+	// with a reply matching what was just written.
+	answerEX2RTCVerifyRead(t, fake, 2026, 11, 2, 1, 13, 38, 58)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Set: %v", err)
 	}
 }
 
@@ -140,16 +168,18 @@ func TestEX2Writer_Set_ConvertsNonUTCInputToUTC(t *testing.T) {
 	go func() { done <- w.Set(when) }()
 
 	got := fake.ReadFrame(t, 13, 3*time.Second)
-	if err := <-done; err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
 	want, err := mcu.EX2DateTimeFrame(2026, 11, 2, 1, 13, 38, 58) // the UTC fields, not the +03 ones
 	if err != nil {
 		t.Fatalf("EX2DateTimeFrame: %v", err)
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X (the UTC fields - got the +03 ones instead if this fails)", got, want)
+	}
+
+	answerEX2RTCVerifyRead(t, fake, 2026, 11, 2, 1, 13, 38, 58)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Set: %v", err)
 	}
 }
 

@@ -214,13 +214,94 @@ func EX2DateTimeFrame(year, mon, dom, dow, hour, min, sec int) ([]byte, error) {
 	return buildDateTimeFrame(ex2WDateAndTime, year, mon, dom, dow, hour, min, sec), nil
 }
 
-// SetDateAndTime writes EX2's RTC.
+// ex2RTCVerifyAttempts/ex2RTCVerifyReadTimeout: SetDateAndTime
+// write-then-verify loop.
+//
+// Hardware-confirmed root cause (see BUILDING.md): a RDateAndTime
+// read immediately following a WDateAndTime write can come back with
+// sec/min right (read live off the RTC chip every time) but
+// hour/dow/dom/mon/year FROZEN at a stale snapshot - confirmed by a
+// byte-level trace (this project's own WD_MCU_TRACE, not strace -
+// wrapping every syscall in strace made the bug stop reproducing
+// entirely, so a lightweight in-process trace was added instead)
+// showing the EXACT SAME wrong hour/dow/dom/mon/year bytes returned
+// by two separate reads 1.3s apart, across two separate process
+// invocations, with sec advancing normally between them - while this
+// tool's own flush/send/recv sequence around both reads was
+// completely clean (0 bytes pending at flush, one well-formed frame,
+// matching header) - ruling out anything on this tool's own side
+// (an unread write ack contaminating the next read, in particular).
+// The SAME trace shows the very next WDateAndTime write immediately
+// clears the freeze - the following read is correct again. This is
+// therefore a genuine bug in the MCU firmware's own RTC-read
+// composition, not a transport/timing issue this tool can pace or
+// settle its way around: a flat 300ms pause (in two different
+// placements) and inter-byte write pacing up to 10ms/byte (1000x the
+// vendor's own 10us) were both tried on real hardware and had zero
+// effect on the failure rate.
+//
+// What DOES work, per the same trace: a write clears the freeze. So
+// rather than guess at a delay, SetDateAndTime reads straight back
+// what it just wrote (same process, so it knows the exact expected
+// value - not guessing a "plausible" date the way a standalone read
+// would have to, which is why this doesn't reintroduce the
+// implausible-year sanity check already rejected once: that one
+// would have misdiagnosed a genuinely dead RTC battery as
+// corruption, this one only ever compares against a value this same
+// call just sent) and re-sends the write if the readback doesn't
+// match, up to ex2RTCVerifyAttempts times.
+//
+// ex2RTCVerifyReadTimeout matches cmd/wd-control-tool/main.go's own
+// ex2RTCReplyTimeout (not shared as a single constant - different
+// packages, same reasoning: how long a RDateAndTime reply can take).
+const (
+	ex2RTCVerifyAttempts    = 3
+	ex2RTCVerifyReadTimeout = 2 * time.Second
+)
+
+// SetDateAndTime writes EX2's RTC, then reads it straight back to
+// verify the write actually took - see ex2RTCVerifyAttempts' own doc
+// comment for the hardware bug this guards against and why a plain
+// fire-and-forget send isn't enough on this board.
 func (m *EX2) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
 	frame, err := EX2DateTimeFrame(year, mon, dom, dow, hour, min, sec)
 	if err != nil {
 		return err
 	}
-	return sendLegacy(m.p, frame)
+
+	var lastErr error
+	for attempt := 1; attempt <= ex2RTCVerifyAttempts; attempt++ {
+		if err := sendLegacy(m.p, frame); err != nil {
+			return err
+		}
+
+		reply, err := m.DateAndTimeReply(ex2RTCVerifyReadTimeout)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(reply) == 0 {
+			lastErr = fmt.Errorf("mcu: RTC write verify: no reply from MCU within %v", ex2RTCVerifyReadTimeout)
+			continue
+		}
+		gotYear, gotMon, gotDom, _, gotHour, gotMin, _, err := EX2DecodeDateAndTime(reply)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		// sec is deliberately not compared: real time keeps ticking
+		// between the write and this readback, so an exact match on
+		// sec isn't expected even when the write fully took. dow
+		// isn't compared either - it's derived from year/mon/dom by
+		// every caller (see EX2Writer.Set), not an independent field
+		// worth cross-checking on its own.
+		if gotYear == year && gotMon == mon && gotDom == dom && gotHour == hour && gotMin == min {
+			return nil
+		}
+		lastErr = fmt.Errorf("mcu: RTC write did not take effect: wrote %04d-%02d-%02d %02d:%02d, read back %04d-%02d-%02d %02d:%02d",
+			year, mon, dom, hour, min, gotYear, gotMon, gotDom, gotHour, gotMin)
+	}
+	return lastErr
 }
 
 // EX2PowerLEDFrames builds the two NewPWRLed frames the real `led`

@@ -452,12 +452,69 @@ func TestEX2_SetDateAndTime_OverPTY(t *testing.T) {
 	go func() { done <- m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58) }() // real-hardware worked example
 
 	got := fake.ReadFrame(t, 13, time.Second)
-	if err := <-done; err != nil {
-		t.Fatalf("SetDateAndTime: %v", err)
-	}
-
 	want := []byte{0xFA, 0x01, 0x08, 0x02, 0x07, 0x58, 0x38, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
 	if !bytes.Equal(got, want) {
 		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+
+	// SetDateAndTime reads straight back after writing to verify it
+	// took (see ex2RTCVerifyAttempts' own doc comment) - answer with
+	// a reply matching what was just written so the verify succeeds.
+	gotVerifyReq := fake.ReadFrame(t, 7, time.Second)
+	if wantReq := EX2DateTimeRequestFrame(); !bytes.Equal(gotVerifyReq, wantReq) {
+		t.Fatalf("verify request frame = % X, want % X", gotVerifyReq, wantReq)
+	}
+	verifyReply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x58, 0x38, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	if _, err := fake.Master.Write(verifyReply); err != nil {
+		t.Fatalf("write fake verify reply: %v", err)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("SetDateAndTime: %v", err)
+	}
+}
+
+// TestEX2_SetDateAndTime_RetriesWriteWhenVerifyReadMismatches is a
+// direct regression test for the hardware bug ex2RTCVerifyAttempts'
+// own doc comment describes (confirmed via a real-hardware trace,
+// not guessed): a RDateAndTime read immediately after a WDateAndTime
+// write can come back with a stale hour/dow/dom/mon/year, even
+// though the frame itself is perfectly well-formed. Scripts the fake
+// MCU to answer the first verify read with exactly that shape of
+// wrong-but-well-formed reply, then checks SetDateAndTime notices the
+// mismatch, re-sends the write, and succeeds once the second verify
+// read reports the correct value - matching what real hardware was
+// observed to do (the next write clears the stale value).
+func TestEX2_SetDateAndTime_RetriesWriteWhenVerifyReadMismatches(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58) }()
+
+	wantWrite := []byte{0xFA, 0x01, 0x08, 0x02, 0x07, 0x58, 0x38, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	wantReadReq := EX2DateTimeRequestFrame()
+	correctReply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x58, 0x38, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	// Real-hardware shape: well-formed, same header, hour/dow/dom/mon/
+	// year stale/wrong (resembling an old test value) while sec/min
+	// still match what was just written.
+	staleReply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x58, 0x38, 0x01, 0x02, 0x11, 0x10, 0x01, 0xFB}
+
+	for attempt, reply := range [][]byte{staleReply, correctReply} {
+		gotWrite := fake.ReadFrame(t, 13, time.Second)
+		if !bytes.Equal(gotWrite, wantWrite) {
+			t.Fatalf("attempt %d: write frame = % X, want % X", attempt+1, gotWrite, wantWrite)
+		}
+		gotReadReq := fake.ReadFrame(t, 7, time.Second)
+		if !bytes.Equal(gotReadReq, wantReadReq) {
+			t.Fatalf("attempt %d: verify request frame = % X, want % X", attempt+1, gotReadReq, wantReadReq)
+		}
+		if _, err := fake.Master.Write(reply); err != nil {
+			t.Fatalf("attempt %d: write fake verify reply: %v", attempt+1, err)
+		}
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("SetDateAndTime: %v", err)
 	}
 }

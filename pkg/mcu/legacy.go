@@ -24,12 +24,21 @@ import "time"
 const (
 	legacyStart = 0xFA
 	legacyEnd   = 0xFB
-	// up_send_daemon's own transmit loop pace (usleep(10us)) - far
-	// smaller than one UART bit time at either board's baud rate, so
-	// it is not load-bearing, but reproduced for parity with the
-	// vendor implementation. See SPEC.md.
-	legacyInterByteDelay = 10 * time.Microsecond
 )
+
+// legacyInterByteDelay is up_send_daemon's own transmit loop pace
+// (usleep(10us)) - far smaller than one UART bit time at either
+// board's baud rate, so it is not load-bearing on its own, but
+// reproduced for parity with the vendor implementation. See SPEC.md.
+//
+// A WD_LEGACY_BYTE_DELAY_US override (up to 1000x this value, i.e.
+// 10ms/byte on a 13-byte frame) was tried here as a diagnostic for
+// the EX2 RTC write-then-read corruption investigation and had zero
+// effect on the failure rate - see BUILDING.md and pkg/mcu/ex2.go's
+// ex2RTCVerifyAttempts for the real root cause this turned out to be
+// (an MCU-firmware bug, not a transport timing issue) and the actual
+// fix. Removed rather than left in place doing nothing.
+const legacyInterByteDelay = 10 * time.Microsecond
 
 // legacyCmd is one row of the vendor command table, extracted
 // byte-for-byte from the real binaries' .data section (python
