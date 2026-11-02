@@ -535,14 +535,25 @@ points at a race inside the MCU's own firmware between its
 `WDateAndTime` and `RDateAndTime` handlers specifically when a read
 lands too soon after a write - a different trigger from the
 earlier-tested (and disproven) "settle delay between consecutive
-READS" idea, never isolated on its own before. Mitigated with
-`ex2RTCPostWriteSettleDelay` (300ms, `pkg/rtc/rtc.go`, same
-unconditional-every-time shape as `ex2PowerLEDInterFrameDelay`) added
-after a successful write, inside `EX2Writer`/`EX4Writer.Set` itself
-so every caller gets it, not just the CLI's own chaining - a
-defensive heuristic, not a confirmed hardware value, called out as
-such in its own doc comment. Awaiting a real-hardware retest with
-the exact same repeated-chain reproduction to confirm.
+READS" idea, never isolated on its own before. A second mitigation
+attempt, `ex2RTCPostWriteSettleDelay` (300ms, added after a
+successful write inside `EX2Writer`/`EX4Writer.Set` itself), was
+retested with the EXACT same repeated-chain reproduction and also
+had **zero measurable effect** - the bug recurred (iteration 6 of
+10, same "right frame, specific fields wrong" shape, this time only
+`year`). Removed rather than left in place doing nothing: this
+project does not keep a "fix" around once real-hardware testing
+disproves it, matching how the earlier (also-disproven)
+`ex2RTCRequestSettleDelay` was removed, not kept as dead weight.
+Next step: compare this same repeated-chain reproduction against the
+VENDOR's own `rtc -r`/`rtc -w`/`rtc -s` (necessarily as separate
+process invocations, since the vendor tool has no chaining concept
+at all) - if the vendor's own tool shows the identical "right frame,
+wrong field(s), sticky until next write" pattern, that confirms this
+is purely an MCU-firmware race with no fix available on this
+project's side at all, and also answers whether crossing a real
+process boundary (not just elapsed time) matters, since the vendor
+can never NOT cross one between actions.
 
 ## What this does NOT cover
 
