@@ -507,6 +507,16 @@ can't hide behind an all-UTC test suite again - confirmed to fail
 against the pre-fix code (reverted it, ran them, saw the wrong hour
 byte, restored the fix) before trusting them.
 
+A ninth, much smaller finding: a real `-r w` run printed NOTHING on
+success - `buildRTCWriteAction`'s `apply` just returned
+`EX2Writer`/`EX4Writer.Set`'s own error (or nil) with no output of
+its own, unlike every other rtc subcommand ("r"/"s" both print "RTC
+time = ..."). The vendor `rtc -w` itself prints "system time: ...".
+Fixed by printing the same wording on success, using the exact UTC
+value already computed for the `-D` frame preview (not a second,
+independently-computed `time.Now()`, which would drift a few
+milliseconds from what was actually sent).
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

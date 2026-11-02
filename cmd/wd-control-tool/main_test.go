@@ -573,6 +573,65 @@ func TestRun_RTCWrite_EX2_RealRunSendsCorrectFrame(t *testing.T) {
 	}
 }
 
+// A successful "-r w" printed NOTHING at all on stdout - every other
+// rtc subcommand ("r": "RTC time = ..."; "s": "RTC time = ..." plus
+// "system time set to ..."; a decode/no-reply failure under any
+// subcommand) prints something, but write's own happy path was
+// silent, unlike the vendor rtc -w's own "system time: ..." line.
+// Confirms both EX2 and EX4 now print it, with the same UTC-tagged
+// value (see pkg/rtc's own package doc comment) the frame itself
+// carries - not a second, independently-computed time.Now().
+func TestRun_RealRun_RTCWrite_PrintsSystemTimeLine(t *testing.T) {
+	for _, tc := range []struct {
+		board board.Board
+		baud  int
+	}{
+		{board.EX2, ex2LegacyBaud},
+		{board.EX4, 19200},
+	} {
+		fake := fakemcu.New(t)
+
+		a, code := buildRTCAction(tc.board, fake.SlavePath, []string{"w"}, false)
+		if code != exitOK || a == nil {
+			t.Fatalf("%v: buildRTCAction: code=%d", tc.board, code)
+		}
+		var wantFrameLine string
+		for _, l := range a.debugLines {
+			if strings.HasPrefix(l, "frame=") {
+				wantFrameLine = l
+			}
+		}
+		wantFrame := strings.TrimPrefix(wantFrameLine, "frame=")
+
+		origOut := os.Stdout
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		os.Stdout = outW
+		outCh := make(chan string, 1)
+		go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+		applyDone := make(chan error, 1)
+		go func() { applyDone <- a.apply() }()
+
+		got := fake.ReadFrame(t, 13, 3*time.Second)
+		if err := <-applyDone; err != nil {
+			t.Fatalf("%v: apply: %v", tc.board, err)
+		}
+		outW.Close()
+		os.Stdout = origOut
+		out := <-outCh
+
+		if gotFrame := fmt.Sprintf("% X", got); gotFrame != wantFrame {
+			t.Fatalf("%v: wire bytes %q != debug preview %q", tc.board, gotFrame, wantFrame)
+		}
+		if !strings.Contains(out, "rtc: system time: ") {
+			t.Errorf("%v: stdout=%q, want an \"rtc: system time: ...\" line", tc.board, out)
+		}
+	}
+}
+
 // rtc.ErrEX4ReadNotImplemented is exported specifically so a caller
 // can check for it with errors.Is - mirrors the same contract the
 // now-removed ErrEX2NotImplemented used to pin (see git history),

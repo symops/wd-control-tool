@@ -573,7 +573,11 @@ vendor tool directly, not by reasoning about it.
   table dump**: B7 here is `07`, not the `01` the table recorded (the
   same value as `RDateAndTime`'s own row) - the table extraction was
   wrong for this one field; `RDateAndTime`'s B7=`01` WAS confirmed
-  correct by the same capture.
+  correct by the same capture. Prints `rtc: system time: ...`
+  matching the vendor's own wording on success - this had been
+  missed entirely at first (a real write ran silently, unlike every
+  other rtc subcommand), found via a direct side-by-side with the
+  vendor tool.
 - **Read (RTC -> SYS)**: confirmed for **EX2 only** - a live capture
   of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43) decoded the
   reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` - the request's own

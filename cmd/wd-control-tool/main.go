@@ -784,7 +784,12 @@ func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
 					return err
 				}
 				defer p.Close()
-				return rtc.EX4Writer{MCU: mcu.NewEX4(p)}.Set(now)
+				w := rtc.EX4Writer{MCU: mcu.NewEX4(p)}
+				if err := w.Set(now); err != nil {
+					return err
+				}
+				fmt.Printf("rtc: system time: %s\n", utc.Format(rtcTimeLayout))
+				return nil
 			},
 		}, exitOK
 	case board.EX2:
@@ -799,7 +804,12 @@ func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
 					return err
 				}
 				defer p.Close()
-				return rtc.EX2Writer{MCU: mcu.NewEX2(p)}.Set(now)
+				w := rtc.EX2Writer{MCU: mcu.NewEX2(p)}
+				if err := w.Set(now); err != nil {
+					return err
+				}
+				fmt.Printf("rtc: system time: %s\n", utc.Format(rtcTimeLayout))
+				return nil
 			},
 		}, exitOK
 	default:
