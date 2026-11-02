@@ -33,6 +33,30 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// ex2RTCPostWriteSettleDelay is a pause AFTER a successful
+// WDateAndTime write, before Set returns - every time, not only
+// when actually chained into an immediately-following read.
+//
+// Unlike this project's other timing constants, this one is NOT a
+// captured, confirmed hardware value - it's a defensive heuristic,
+// same shape as ex2PowerLEDInterFrameDelay. Real-hardware testing
+// (`rtc r`/`rtc w`/`rtc s` chained with no think-time, repeated many
+// times with 3s gaps between attempts) found that a RDateAndTime
+// read immediately following a WDateAndTime write intermittently
+// comes back with some fields correct (sec/min/hour, freshly
+// written) and others wrong - dow/dom/mon/year mixed up or stale,
+// NOT random noise (the reply frame itself is always well-formed) -
+// and, once wrong, the SAME wrong value kept reappearing on
+// subsequent independent reads until the next write "reset" it. That
+// shape (some fields right, some consistently wrong until the next
+// write) points at a race inside the MCU's own firmware between its
+// WDateAndTime and RDateAndTime handlers, not at anything host-side
+// (this project's own EARLIER settle-delay attempt, added between
+// consecutive READS, had zero measurable effect - a DIFFERENT
+// trigger from read-immediately-after-WRITE, never tested with a
+// pause before). See BUILDING.md for the full capture.
+const ex2RTCPostWriteSettleDelay = 300 * time.Millisecond
+
 // EX4Writer writes the host's current time to EX4's MCU RTC.
 //
 // t is converted to UTC before its fields are extracted - the RTC
@@ -50,7 +74,11 @@ func (w EX4Writer) Set(t time.Time) error {
 	t = t.UTC()
 	year, mon, dom := t.Date()
 	dow := int(t.Weekday()) // 0=Sunday, matching the vendor's own dow convention - confirmed day-by-day for all 7 days, see TestEX4Writer_Set_WeekdayEncoding
-	return w.MCU.SetDateAndTime(year, int(mon), dom, dow, t.Hour(), t.Minute(), t.Second())
+	if err := w.MCU.SetDateAndTime(year, int(mon), dom, dow, t.Hour(), t.Minute(), t.Second()); err != nil {
+		return err
+	}
+	time.Sleep(ex2RTCPostWriteSettleDelay)
+	return nil
 }
 
 // EX2Writer writes the host's current time to EX2's MCU RTC -
@@ -67,7 +95,11 @@ func (w EX2Writer) Set(t time.Time) error {
 	t = t.UTC()
 	year, mon, dom := t.Date()
 	dow := int(t.Weekday())
-	return w.MCU.SetDateAndTime(year, int(mon), dom, dow, t.Hour(), t.Minute(), t.Second())
+	if err := w.MCU.SetDateAndTime(year, int(mon), dom, dow, t.Hour(), t.Minute(), t.Second()); err != nil {
+		return err
+	}
+	time.Sleep(ex2RTCPostWriteSettleDelay)
+	return nil
 }
 
 // EX2Reader reads EX2's MCU RTC - hardware-confirmed (see pkg/mcu's

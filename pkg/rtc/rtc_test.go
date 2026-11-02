@@ -126,6 +126,26 @@ func TestEX2Writer_Set(t *testing.T) {
 	}
 }
 
+// Confirms ex2RTCPostWriteSettleDelay actually elapses before Set
+// returns - mirrors mcu.TestEX2_PowerLED_PausesBetweenFrames.
+func TestEX2Writer_Set_PausesAfterWrite(t *testing.T) {
+	fake := fakemcu.New(t)
+	w := EX2Writer{MCU: mcu.NewEX2(mcu.OpenFile(fake.Slave))}
+
+	when := time.Date(2026, time.November, 2, 13, 38, 58, 0, time.UTC)
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- w.Set(when) }()
+
+	fake.ReadFrame(t, 13, 3*time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < ex2RTCPostWriteSettleDelay {
+		t.Errorf("Set took %v end-to-end, want at least %v (the post-write settle delay)", elapsed, ex2RTCPostWriteSettleDelay)
+	}
+}
+
 // Same CONFIRMED BUG regression as TestEX4Writer_Set_ConvertsNonUTCInputToUTC,
 // for EX2Writer - same instant as TestEX2Writer_Set's own `when`
 // (2026-11-02T13:38:58Z), expressed in a +03 zone instead.

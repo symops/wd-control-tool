@@ -517,6 +517,33 @@ value already computed for the `-D` frame preview (not a second,
 independently-computed `time.Now()`, which would drift a few
 milliseconds from what was actually sent).
 
+A tenth finding, found by chaining `rtc r`+`rtc w`+`rtc s` (`-D`)
+many times in a row with a few seconds between attempts (to mimic
+how the bug was first noticed - manual, unhurried typing, not a
+tight scripted loop): a `RDateAndTime` read immediately following a
+`WDateAndTime` write intermittently came back with SOME fields
+correct and others wrong. One captured example (write
+`sec=48,min=49,hour=15,dow=01,dom=02,mon=11,year=26`, the very next
+read): `sec=48,min=49,hour=15` (identical, correctly fresh) but
+`dow=02,dom=11,mon=10,year=01` (all wrong - not the just-written
+values, not random noise either: a well-formed, decodable frame,
+just semantically stale/mixed). The SAME wrong value then reappeared
+on the NEXT, completely independent process invocation's own read -
+not until the FOLLOWING write did a read come back correct again.
+That "stays wrong until the next write, right frame shape" signature
+points at a race inside the MCU's own firmware between its
+`WDateAndTime` and `RDateAndTime` handlers specifically when a read
+lands too soon after a write - a different trigger from the
+earlier-tested (and disproven) "settle delay between consecutive
+READS" idea, never isolated on its own before. Mitigated with
+`ex2RTCPostWriteSettleDelay` (300ms, `pkg/rtc/rtc.go`, same
+unconditional-every-time shape as `ex2PowerLEDInterFrameDelay`) added
+after a successful write, inside `EX2Writer`/`EX4Writer.Set` itself
+so every caller gets it, not just the CLI's own chaining - a
+defensive heuristic, not a confirmed hardware value, called out as
+such in its own doc comment. Awaiting a real-hardware retest with
+the exact same repeated-chain reproduction to confirm.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

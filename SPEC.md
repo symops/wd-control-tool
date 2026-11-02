@@ -577,7 +577,19 @@ vendor tool directly, not by reasoning about it.
   matching the vendor's own wording on success - this had been
   missed entirely at first (a real write ran silently, unlike every
   other rtc subcommand), found via a direct side-by-side with the
-  vendor tool.
+  vendor tool. **A `RDateAndTime` read immediately following a
+  `WDateAndTime` write can intermittently come back with some
+  fields right (sec/min/hour, freshly written) and others wrong**
+  (dow/dom/mon/year mixed up or stale) - repeated real-hardware
+  testing (`rtc r`+`rtc w`+`rtc s` chained, many attempts, several
+  seconds apart) showed this reproduces every few attempts, and once
+  wrong, the SAME wrong value kept reappearing on independent
+  subsequent reads until the next write. The reply frame itself is
+  always well-formed - this points at a race inside the MCU's own
+  firmware between its `WDateAndTime` and `RDateAndTime` handlers,
+  not at anything on this tool's own side. Mitigated with
+  `ex2RTCPostWriteSettleDelay` (`pkg/rtc/rtc.go`) - a defensive pause
+  after a successful write, not a confirmed hardware value.
 - **Read (RTC -> SYS)**: confirmed for **EX2 only** - a live capture
   of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43) decoded the
   reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` - the request's own
