@@ -115,27 +115,39 @@ func (p *Port) sendBytes(b []byte, pace func()) error {
 	return nil
 }
 
-// findFrame scans buf for the first 7-byte window starting with
-// 0xFA, ending 6 bytes later with 0xFB, with cat/subcmd at offsets 1
-// and 2 - skipping over anything else in buf before or after it.
+// findFrame scans buf for the first frameLen-byte window starting
+// with 0xFA, ending with 0xFB, with header matching starting at
+// offset 1 (so len(header)==2 checks cat/subcmd at offsets 1 and 2;
+// EX2DecodeDateAndTime's 13-byte frame also checks B6 at offset 3) -
+// skipping over anything else in buf before or after it.
 //
 // Needed because a specific request's reply isn't reliably at
-// buf[0:7]: real EX2 hardware was found to interleave an unsolicited
-// `FA 30 00 00 00 00 FB` frame with FanStatusGet's own reply,
-// independent of request/reply timing (sometimes before it,
-// sometimes after, sometimes a leftover one from a previous
-// invocation glued to the front of the current one - see
-// (*Port).flushInput, which reduces but may not eliminate every
-// case). EX2DecodeFanRPM and EX2UDecodeTempFahrenheit both call this
+// buf[0:frameLen]: real EX2 hardware was found to interleave an
+// unsolicited `FA 30 00 00 00 00 FB` frame with FanStatusGet's own
+// reply (and, separately, with RDateAndTime's), independent of
+// request/reply timing (sometimes before it, sometimes after,
+// sometimes a leftover one from a previous invocation glued to the
+// front of the current one - see (*Port).flushInput, which reduces
+// but may not eliminate every case). EX2DecodeFanRPM,
+// EX2UDecodeTempFahrenheit and EX2DecodeDateAndTime all call this
 // instead of assuming an offset.
-func findFrame(buf []byte, cat, subcmd byte) ([]byte, error) {
-	const frameLen = 7
+func findFrame(buf []byte, header []byte, frameLen int) ([]byte, error) {
 	for i := 0; i+frameLen <= len(buf); i++ {
-		if buf[i] == 0xFA && buf[i+6] == 0xFB && buf[i+1] == cat && buf[i+2] == subcmd {
+		if buf[i] != 0xFA || buf[i+frameLen-1] != 0xFB {
+			continue
+		}
+		match := true
+		for j, h := range header {
+			if buf[i+1+j] != h {
+				match = false
+				break
+			}
+		}
+		if match {
 			return buf[i : i+frameLen], nil
 		}
 	}
-	return nil, fmt.Errorf("mcu: no FA %02X %02X .. FB frame found in reply: % X", cat, subcmd, buf)
+	return nil, fmt.Errorf("mcu: no FA % X .. FB (%d-byte) frame found in reply: % X", header, frameLen, buf)
 }
 
 // flushInput discards any bytes already waiting to be read on the

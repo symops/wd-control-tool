@@ -114,7 +114,7 @@ func (m *EX2U) TempReply(timeout time.Duration) ([]byte, error) {
 // Scans reply for the matching frame via findFrame rather than
 // assuming it starts at offset 0, for the same reason.
 func EX2UDecodeTempFahrenheit(reply []byte) (int, error) {
-	frame, err := findFrame(reply, 0x03, 0x08)
+	frame, err := findFrame(reply, []byte{0x03, 0x08}, 7)
 	if err != nil {
 		return 0, err
 	}

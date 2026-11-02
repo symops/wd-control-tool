@@ -66,6 +66,11 @@ func buildByteWriteFrame(c legacyCmd, value byte) []byte {
 // up_send_ctl's WDateAndTime handler disassembly.
 func toBCD(v int) byte { return byte(((v / 10) << 4) | (v % 10)) }
 
+// fromBCD unpacks toBCD's inverse: (b>>4)*10 + (b&0x0F). Used to
+// decode an RDateAndTime reply's date/time fields - confirmed via a
+// live capture on real EX2 hardware (see EX2DecodeDateAndTime).
+func fromBCD(b byte) int { return int(b>>4)*10 + int(b&0x0F) }
+
 // buildDateTimeFrame builds WDateAndTime's 13-byte frame:
 // FA b4 b5 b6 b7 <sec,min,hour,dow,dom,mon,year BCD> FB. Field order
 // on the wire is sec..year - reversed from the year..sec CLI/argument

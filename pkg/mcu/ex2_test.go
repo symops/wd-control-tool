@@ -301,3 +301,152 @@ func TestEX2_FanStatusReply_ReturnsRawReplyBytes(t *testing.T) {
 		t.Errorf("FanStatusReply = % X, want % X", r.got, wantReply)
 	}
 }
+
+func TestEX2DateTimeRequestFrame(t *testing.T) {
+	// Real capture of `rtc -r` on real EX2 hardware - see
+	// ex2RDateAndTime's own doc comment.
+	want := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x00, 0xFB}
+	if got := EX2DateTimeRequestFrame(); !bytes.Equal(got, want) {
+		t.Errorf("EX2DateTimeRequestFrame() = % X, want % X", got, want)
+	}
+}
+
+// Golden-byte test against the real capture of `rtc -w` on real EX2
+// hardware while the host's own system time was 2026-11-02 Mon
+// 13:38:58 (see ex2WDateAndTime's own doc comment for the full
+// capture and why B7=0x07, not the table's 0x01).
+func TestEX2DateTimeFrame_RealCapturedExample(t *testing.T) {
+	// year, mon, dom, dow, hour, min, sec - dow=1 (Monday), same 0-6
+	// convention as EX4's.
+	got, err := EX2DateTimeFrame(2026, 11, 2, 1, 13, 38, 58)
+	if err != nil {
+		t.Fatalf("EX2DateTimeFrame: %v", err)
+	}
+	want := []byte{0xFA, 0x01, 0x08, 0x02, 0x07, 0x58, 0x38, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	if !bytes.Equal(got, want) {
+		t.Errorf("EX2DateTimeFrame(...) = % X, want % X", got, want)
+	}
+}
+
+func TestEX2DateTimeFrame_RejectsOutOfRangeFields(t *testing.T) {
+	if _, err := EX2DateTimeFrame(2026, 13, 1, 0, 0, 0, 0); err == nil { // month 13
+		t.Error("EX2DateTimeFrame with month=13: want error, got nil")
+	}
+}
+
+// Golden-byte test against the real capture of `rtc -r` while the
+// MCU's RTC itself read 2026/11/2 Mon 13:39:43 (the vendor tool's own
+// printed line) - see EX2DecodeDateAndTime's own doc comment for the
+// full field-by-field confirmation.
+func TestEX2DecodeDateAndTime_RealCapturedReply(t *testing.T) {
+	reply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	year, mon, dom, dow, hour, min, sec, err := EX2DecodeDateAndTime(reply)
+	if err != nil {
+		t.Fatalf("EX2DecodeDateAndTime: %v", err)
+	}
+	if year != 2026 || mon != 11 || dom != 2 || dow != 1 || hour != 13 || min != 39 || sec != 43 {
+		t.Errorf("got year=%d mon=%d dom=%d dow=%d hour=%d min=%d sec=%d, want 2026/11/2 dow=1 13:39:43",
+			year, mon, dom, dow, hour, min, sec)
+	}
+}
+
+// Same noisy-buffer shape confirmed for FanStatusGet's reply (see
+// TestEX2DecodeFanRPM_RealCapturedNoisyReplies) - RDateAndTime's
+// reply was found interleaved with the same unsolicited
+// `FA 30 00 00 00 00 FB` frame on real hardware too.
+func TestEX2DecodeDateAndTime_SkipsUnsolicitedNoiseFrame(t *testing.T) {
+	noise := []byte{0xFA, 0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+	real := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+
+	for _, reply := range [][]byte{
+		append(append([]byte{}, noise...), real...),
+		append(append([]byte{}, real...), noise...),
+	} {
+		year, _, _, _, _, _, _, err := EX2DecodeDateAndTime(reply)
+		if err != nil {
+			t.Fatalf("EX2DecodeDateAndTime(% X): %v", reply, err)
+		}
+		if year != 2026 {
+			t.Errorf("EX2DecodeDateAndTime(% X): year=%d, want 2026", reply, year)
+		}
+	}
+}
+
+func TestEX2DecodeDateAndTime_RejectsShortOrMalformedReply(t *testing.T) {
+	cases := [][]byte{
+		nil,
+		{},
+		{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26},       // 12 bytes, missing FB
+		{0x00, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}, // wrong start byte
+		{0xFA, 0x01, 0x08, 0x02, 0x07, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}, // WDateAndTime's own B6/B7, not RDateAndTime's
+	}
+	for _, reply := range cases {
+		if _, _, _, _, _, _, _, err := EX2DecodeDateAndTime(reply); err == nil {
+			t.Errorf("EX2DecodeDateAndTime(% X): want error, got nil", reply)
+		}
+	}
+}
+
+func TestEX2_DateAndTimeReply_FlushErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+	fake.Slave.Close()
+
+	if _, err := m.DateAndTimeReply(time.Second); err == nil {
+		t.Fatal("DateAndTimeReply after Close: want error, got nil")
+	}
+}
+
+func TestEX2_DateAndTimeReply_ReturnsRawReplyBytes(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	wantReply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	done := make(chan struct {
+		got []byte
+		err error
+	}, 1)
+	go func() {
+		got, err := m.DateAndTimeReply(3 * time.Second)
+		done <- struct {
+			got []byte
+			err error
+		}{got, err}
+	}()
+
+	gotReq := fake.ReadFrame(t, 7, 3*time.Second)
+	wantReq := EX2DateTimeRequestFrame()
+	if !bytes.Equal(gotReq, wantReq) {
+		t.Fatalf("request frame = % X, want % X", gotReq, wantReq)
+	}
+
+	if _, err := fake.Master.Write(wantReply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("DateAndTimeReply: %v", r.err)
+	}
+	if !bytes.Equal(r.got, wantReply) {
+		t.Errorf("DateAndTimeReply = % X, want % X", r.got, wantReply)
+	}
+}
+
+func TestEX2_SetDateAndTime_OverPTY(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58) }() // real-hardware worked example
+
+	got := fake.ReadFrame(t, 13, time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("SetDateAndTime: %v", err)
+	}
+
+	want := []byte{0xFA, 0x01, 0x08, 0x02, 0x07, 0x58, 0x38, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}

@@ -343,7 +343,9 @@ chained in one command, run in the order given:
   -l, --led ...       led command (see below) - ex2u, ex2, ex4
   -f, --fan LEVEL     board-native units, NOT 0-100 - see README.md - ex2u, ex2, ex4
   -f, --fan rpm       read back the current fan RPM instead of setting a level - ex2 only
-  -r, --rtc write      push the host's current time to the MCU RTC; no read-back - ex4 only
+  -r, --rtc w|r|s      w: push the host's current time to the MCU RTC - ex2, ex4
+                    r: read the MCU RTC and print it - ex2 only (ex4: unconfirmed)
+                    s: like r, and also set the host's system clock from it - ex2 only (ex4: unconfirmed)
   -d, --display TEXT   write text to the front-panel LCD, taken verbatim - ex4 only
   -t, --temp           request and print the temperature as "Temperature: N C" (hardware-confirmed - see SPEC.md) - ex2u only, no arguments
 
@@ -412,8 +414,8 @@ func runAction(a *action, dryRun, debug bool) int {
 // buildAction dispatches to the per-mode builder. Returns (nil, code)
 // for a hard usage error. Argument COUNT is already guaranteed
 // correct by parseArgs' fixed arity - any remaining validation here
-// (unknown zone/color/state names, level out of range, "rtc"'s only
-// recognized subcommand) is a value problem, reported via
+// (unknown zone/color/state names, level out of range, "rtc"'s
+// recognized subcommands) is a value problem, reported via
 // action.planErr so -n can still describe it as "would fail".
 func buildAction(b board.Board, mode, serialPath string, args []string, debug bool) (*action, int) {
 	switch mode {
@@ -433,7 +435,7 @@ func buildAction(b board.Board, mode, serialPath string, args []string, debug bo
 	case "display":
 		return buildDisplayAction(b, serialPath, args)
 	case "rtc":
-		return buildRTCAction(b, serialPath, args)
+		return buildRTCAction(b, serialPath, args, debug)
 	case "temp":
 		return buildTempAction(b, serialPath, args, debug)
 	default:
@@ -702,26 +704,53 @@ func buildDisplayAction(b board.Board, serialPath string, args []string) (*actio
 	}, exitOK
 }
 
-func buildRTCAction(b board.Board, serialPath string, args []string) (*action, int) {
-	if args[0] != "write" {
-		fmt.Fprintf(os.Stderr, "wd-control-tool: unknown rtc subcommand %q (only \"write\" is supported)\n", args[0])
+// ex2RTCReplyTimeout is how long "rtc r"/"rtc s" wait for
+// RDateAndTime's reply - matches ex2FanRPMReplyTimeout's reasoning
+// (generous relative to a real capture, where the reply arrived in
+// well under a second).
+const ex2RTCReplyTimeout = 2 * time.Second
+
+// rtcTimeLayout matches the real vendor `rtc` tool's own printed
+// format exactly (confirmed via a live capture: "RTC time =
+// 2026/11/2 Mon 13:39:43") - Go's reference-time layout for
+// year/month-no-zero/day-no-zero, abbreviated weekday, zero-padded
+// time.
+const rtcTimeLayout = "2006/1/2 Mon 15:04:05"
+
+// buildRTCAction dispatches "-r"/"--rtc"'s one argument to the real
+// vendor `rtc` tool's own letters: w (SYS -> RTC), r (RTC -> SYS,
+// print only) and s (RTC -> SYS, also sets the host's system clock) -
+// see README.md/SPEC.md's "RTC" section.
+func buildRTCAction(b board.Board, serialPath string, args []string, debug bool) (*action, int) {
+	switch args[0] {
+	case "w":
+		return buildRTCWriteAction(b, serialPath)
+	case "r":
+		return buildRTCReadAction(b, serialPath, debug, false)
+	case "s":
+		return buildRTCReadAction(b, serialPath, debug, true)
+	default:
+		fmt.Fprintf(os.Stderr, "wd-control-tool: unknown rtc subcommand %q (want w, r or s)\n", args[0])
 		return nil, exitUsage
 	}
+}
+
+func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
+	// now is captured ONCE and reused by apply below - not
+	// recomputed via a second time.Now() call at send time. The
+	// describe/-D output above promises "the exact frame bytes
+	// that would go out the UART" (see README); a second,
+	// independent time.Now() inside apply would make the ACTUAL
+	// frame sent on a real run differ from the one just shown
+	// (different BCD seconds/minutes, possibly more under the
+	// pacing delay of any action chained before this one),
+	// quietly breaking that promise.
+	now := time.Now()
+	year, mon, dom := now.Date()
+	dow := int(now.Weekday())
 
 	switch b {
 	case board.EX4:
-		// now is captured ONCE and reused by apply below - not
-		// recomputed via a second time.Now() call at send time. The
-		// describe/-D output above promises "the exact frame bytes
-		// that would go out the UART" (see README); a second,
-		// independent time.Now() inside apply would make the ACTUAL
-		// frame sent on a real run differ from the one just shown
-		// (different BCD seconds/minutes, possibly more under the
-		// pacing delay of any action chained before this one),
-		// quietly breaking that promise.
-		now := time.Now()
-		year, mon, dom := now.Date()
-		dow := int(now.Weekday())
 		frame, ferr := mcu.EX4DateTimeFrame(year, int(mon), dom, dow, now.Hour(), now.Minute(), now.Second())
 		return &action{
 			describe:   fmt.Sprintf("write current time (%s) to EX4 MCU RTC (%s)", now.Format(time.RFC3339), serialPath),
@@ -737,13 +766,84 @@ func buildRTCAction(b board.Board, serialPath string, args []string) (*action, i
 			},
 		}, exitOK
 	case board.EX2:
+		frame, ferr := mcu.EX2DateTimeFrame(year, int(mon), dom, dow, now.Hour(), now.Minute(), now.Second())
 		return &action{
-			describe: "write current time to EX2 MCU RTC",
-			planErr:  rtc.ErrEX2NotImplemented,
+			describe:   fmt.Sprintf("write current time (%s) to EX2 MCU RTC (%s)", now.Format(time.RFC3339), serialPath),
+			debugLines: frameDebugLines(ferr, frame, serialPath, ex2LegacyBaud),
+			planErr:    ferr,
+			apply: func() error {
+				p, err := mcu.Open(serialPath, ex2LegacyBaud)
+				if err != nil {
+					return err
+				}
+				defer p.Close()
+				return rtc.EX2Writer{MCU: mcu.NewEX2(p)}.Set(now)
+			},
 		}, exitOK
 	default:
 		return unsupportedErr("rtc is not supported on board %v", b)
 	}
+}
+
+// buildRTCReadAction handles both "r" (print only) and "s" (also set
+// the host's system clock): sync is identical to read except for
+// what happens with the decoded time, so sharing one builder avoids
+// duplicating the whole request/reply/decode plumbing for a
+// one-line difference. EX2-only: EX4's RDateAndTime reply has not
+// had the same live-capture decode treatment (see
+// rtc.ErrEX4ReadNotImplemented).
+func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*action, int) {
+	if b != board.EX2 {
+		verb := "read"
+		if sync {
+			verb = "sync"
+		}
+		return &action{
+			describe: fmt.Sprintf("%s the MCU RTC", verb),
+			planErr:  rtc.ErrEX4ReadNotImplemented,
+		}, exitOK
+	}
+
+	frame := mcu.EX2DateTimeRequestFrame()
+	return &action{
+		describe:   fmt.Sprintf("request the current time from EX2 MCU RTC (%s)", serialPath),
+		debugLines: frameDebugLines(nil, frame, serialPath, ex2LegacyBaud),
+		apply: func() error {
+			p, err := mcu.Open(serialPath, ex2LegacyBaud)
+			if err != nil {
+				return err
+			}
+			defer p.Close()
+			reply, err := mcu.NewEX2(p).DateAndTimeReply(ex2RTCReplyTimeout)
+			if err != nil {
+				return err
+			}
+			if debug {
+				fmt.Printf("debug: reply=% X\n", reply)
+			}
+			if len(reply) == 0 {
+				fmt.Printf("rtc: no reply from MCU within %v\n", ex2RTCReplyTimeout)
+				return nil
+			}
+			year, mon, dom, _, hour, min, sec, derr := mcu.EX2DecodeDateAndTime(reply)
+			if derr != nil {
+				// derr's own text embeds the raw reply bytes - not
+				// printed here so -D stays the only way to see them.
+				fmt.Println("rtc: couldn't decode a time from the MCU's reply (run with -D to see the raw bytes)")
+				return nil
+			}
+			t := time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.Local)
+			fmt.Printf("rtc: RTC time = %s\n", t.Format(rtcTimeLayout))
+			if !sync {
+				return nil
+			}
+			if err := rtc.SetSystemTime(t); err != nil {
+				return err
+			}
+			fmt.Printf("rtc: system time set to %s\n", t.Format(rtcTimeLayout))
+			return nil
+		},
+	}, exitOK
 }
 
 // ex2uTempReplyTimeout is how long buildTempAction waits for a reply

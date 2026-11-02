@@ -332,7 +332,7 @@ func TestRun_MultipleActions_FailFastOnRealRun(t *testing.T) {
 // one's hard error stops everything with the second action's own
 // exit code (2), not the first action's (which would be 0).
 func TestRun_MultipleActions_SecondActionUnsupportedStopsChain(t *testing.T) {
-	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-r", "write"})
+	code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-f", "50", "-r", "w"})
 	if code != exitUnsupported {
 		t.Errorf("code=%d, want %d; out=%q err=%q", code, exitUnsupported, out, errOut)
 	}
@@ -360,7 +360,7 @@ func TestRun_MultipleActions_SecondActionUnsupportedStopsChain(t *testing.T) {
 func TestRun_MultipleActions_EarlierActionAlreadyAppliedBeforeLaterUnsupportedStopsChain(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-f", "50", "-r", "write"})
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-f", "50", "-r", "w"})
 	if code != exitUnsupported {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}
@@ -518,57 +518,284 @@ func TestRun_DisplayUnsupportedOnEX2AndEX2U(t *testing.T) {
 	}
 }
 
-func TestRun_RTCWriteUnimplementedOnEX2(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-r", "write"})
+// EX2's rtc write used to be "not implemented" (unconfirmed frame
+// layout) - now hardware-confirmed (see pkg/mcu/ex2.go's
+// ex2WDateAndTime), so a dry-run now shows a real frame, not a
+// "would fail" line.
+func TestRun_RTCWrite_DryRunOnEX2(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-D", "-r", "w"})
 	if code != exitOK {
-		t.Errorf("code=%d, want 0 (dry-run always exits 0 for a 'would fail' case)", code)
+		t.Errorf("code=%d, want 0", code)
 	}
-	if !strings.Contains(out, "would fail") {
-		t.Errorf("out=%q, want a 'would fail' line mentioning EX2's RTC gap", out)
+	if strings.Contains(out, "would fail") {
+		t.Errorf("out=%q, EX2 rtc write is implemented now - should not report 'would fail'", out)
 	}
-}
-
-// Only the dry-run case above was ever tested - confirms the REAL
-// (non-dry-run) exit code too: EX2's rtc write is "not implemented"
-// (a planErr, exitUsage=1), semantically distinct from "not supported
-// on this board" (exitUnsupported=2, e.g. EX2's display) even though
-// both end up unable to do anything - "not implemented" is this
-// project's own gap (a future RE pass could close it), while "not
-// supported" is a hardware fact that will never change.
-func TestRun_RTCWriteUnimplementedOnEX2_RealRun(t *testing.T) {
-	code, _, errOut := captureRun(t, []string{"-b", "ex2", "-r", "write"})
-	if code != exitUsage {
-		t.Errorf("code=%d, want %d (exitUsage, distinct from exitUnsupported)", code, exitUsage)
-	}
-	if !strings.Contains(errOut, "not confirmed yet") {
-		t.Errorf("errOut=%q, want it to mention EX2's RTC gap", errOut)
+	if !strings.Contains(out, "EX2 MCU RTC") {
+		t.Errorf("out=%q, want it to mention EX2's MCU RTC", out)
 	}
 }
 
-// rtc.ErrEX2NotImplemented is exported specifically so a caller can
-// check for it with errors.Is - a library consumer of this project's
-// packages (not just this CLI) might reasonably do that, rather than
-// matching its message text, since it's a well-known sentinel. That
-// contract was never actually pinned anywhere: nothing in this
-// codebase uses errors.Is/errors.As at all, and buildRTCAction's
-// action.planErr field is only ever inspected as a string (via the
-// CLI's own stdout/stderr) in every other test. Confirm the sentinel
-// identity survives unwrapped all the way into action.planErr, so a
-// future refactor can't silently start wrapping it (e.g.
-// fmt.Errorf("rtc: %w", ...)) without a test catching that it broke
-// errors.Is for anyone depending on it.
-func TestBuildRTCAction_EX2_PlanErrIsErrEX2NotImplemented(t *testing.T) {
-	act, code := buildRTCAction(board.EX2, "/dev/ttyS1", []string{"write"})
-	if code != exitOK || act == nil {
-		t.Fatalf("buildRTCAction(EX2, write): act=%v code=%d", act, code)
+// Real-hardware worked example (2026-11-02 Mon 13:38:58, see
+// pkg/mcu/ex2.go's ex2WDateAndTime doc comment) run through the
+// actual real (non-dry-run) code path against a fake MCU, confirming
+// -D's frame preview matches the bytes actually sent - same
+// regression this project already guards for EX4
+// (TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted).
+func TestRun_RTCWrite_EX2_RealRunSendsCorrectFrame(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildRTCAction(board.EX2, fake.SlavePath, []string{"w"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildRTCAction: code=%d", code)
 	}
-	if !errors.Is(act.planErr, rtc.ErrEX2NotImplemented) {
-		t.Errorf("planErr = %v, want errors.Is(planErr, rtc.ErrEX2NotImplemented) to hold", act.planErr)
+	if len(a.debugLines) == 0 {
+		t.Fatal("debugLines is empty")
+	}
+	var wantFrameLine string
+	for _, l := range a.debugLines {
+		if strings.HasPrefix(l, "frame=") {
+			wantFrameLine = l
+		}
+	}
+	if wantFrameLine == "" {
+		t.Fatalf("debugLines=%v, want a frame=... line", a.debugLines)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- a.apply() }()
+
+	got := fake.ReadFrame(t, 13, 3*time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if gotLine := fmt.Sprintf("frame=% X", got); gotLine != wantFrameLine {
+		t.Errorf("wire bytes %q != debug preview %q", gotLine, wantFrameLine)
+	}
+}
+
+// rtc.ErrEX4ReadNotImplemented is exported specifically so a caller
+// can check for it with errors.Is - mirrors the same contract the
+// now-removed ErrEX2NotImplemented used to pin (see git history),
+// just for EX4's still-unconfirmed read direction instead of EX2's
+// now-confirmed write.
+func TestBuildRTCAction_EX4_ReadAndSync_PlanErrIsErrEX4ReadNotImplemented(t *testing.T) {
+	for _, sub := range []string{"r", "s"} {
+		act, code := buildRTCAction(board.EX4, "/dev/ttyS1", []string{sub}, false)
+		if code != exitOK || act == nil {
+			t.Fatalf("buildRTCAction(EX4, %q): act=%v code=%d", sub, act, code)
+		}
+		if !errors.Is(act.planErr, rtc.ErrEX4ReadNotImplemented) {
+			t.Errorf("rtc %q: planErr = %v, want errors.Is(planErr, rtc.ErrEX4ReadNotImplemented) to hold", sub, act.planErr)
+		}
+	}
+}
+
+func TestRun_RTCReadAndSync_UnimplementedOnEX4_RealRun(t *testing.T) {
+	for _, sub := range []string{"r", "s"} {
+		code, _, errOut := captureRun(t, []string{"-b", "ex4", "-r", sub})
+		if code != exitUsage {
+			t.Errorf("rtc %q: code=%d, want %d", sub, code, exitUsage)
+		}
+		if !strings.Contains(errOut, "not confirmed yet") {
+			t.Errorf("rtc %q: errOut=%q, want it to mention EX4's RTC read gap", sub, errOut)
+		}
+	}
+}
+
+func TestRun_DryRun_RTCReadAndSync_EX2(t *testing.T) {
+	for _, sub := range []string{"r", "s"} {
+		code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-D", "-r", sub})
+		if code != exitOK {
+			t.Fatalf("rtc %q: code=%d out=%q", sub, code, out)
+		}
+		if !strings.Contains(out, "FA 01 08 01 01 00 FB") {
+			t.Errorf("rtc %q: out=%q, want the RDateAndTime request frame", sub, out)
+		}
+		if !strings.Contains(out, "request the current time") {
+			t.Errorf("rtc %q: out=%q, missing the dry-run description line", sub, out)
+		}
+	}
+}
+
+// End-to-end CLI version of mcu.TestEX2DecodeDateAndTime_RealCapturedReply:
+// feeds the exact bytes captured on real EX2 hardware via `rtc -r`
+// and confirms the default (non-debug) output matches the vendor's
+// own wording exactly ("RTC time = 2026/11/2 Mon 13:39:43"). Only
+// "r" is exercised with a real reply here - "s" shares this same
+// decode path up to the print, then additionally calls
+// rtc.SetSystemTime for real, which this project's own tests
+// deliberately never do (see BUILDING.md) - so "s"'s no-reply/
+// decode-failure branches are tested below instead, never its full
+// success path.
+func TestRun_RealRun_RTCRead_DecodesRealCapturedReply(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildRTCAction(board.EX2, fake.SlavePath, []string{"r"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildRTCAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the RDateAndTime request
+	realCapturedReply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	if _, err := fake.Master.Write(realCapturedReply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if strings.Contains(out, "FA 01 08 01 01 43 39 13 01 02 11 26 FB") {
+		t.Errorf("stdout=%q, raw reply bytes must not be printed without -D", out)
+	}
+	if !strings.Contains(out, "rtc: RTC time = 2026/11/2 Mon 13:39:43") {
+		t.Errorf("stdout=%q, want the decoded RTC time line matching the vendor's own wording", out)
+	}
+}
+
+func TestRun_RealRun_RTCRead_DebugPrintsRawReplyBytes(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildRTCAction(board.EX2, fake.SlavePath, []string{"r"}, true)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildRTCAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second)
+	reply := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	if _, err := fake.Master.Write(reply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "debug: reply=FA 01 08 01 01 43 39 13 01 02 11 26 FB") {
+		t.Errorf("stdout=%q, want the raw reply debug line", out)
+	}
+	if !strings.Contains(out, "rtc: RTC time = 2026/11/2 Mon 13:39:43") {
+		t.Errorf("stdout=%q, want the decoded RTC time line too", out)
+	}
+}
+
+// Mirrors TestRun_RealRun_EX2FanRPM_NoReplyPrintsNoReplyMessage -
+// covers both "r" and "s" since neither ever reaches
+// rtc.SetSystemTime when the MCU doesn't reply at all.
+func TestRun_RealRun_RTCReadAndSync_NoReplyPrintsNoReplyMessage(t *testing.T) {
+	for _, sub := range []string{"r", "s"} {
+		fake := fakemcu.New(t)
+
+		a, code := buildRTCAction(board.EX2, fake.SlavePath, []string{sub}, false)
+		if code != exitOK || a == nil {
+			t.Fatalf("rtc %q: buildRTCAction: code=%d", sub, code)
+		}
+
+		origOut := os.Stdout
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		os.Stdout = outW
+		outCh := make(chan string, 1)
+		go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+		applyDone := make(chan error, 1)
+		go func() { applyDone <- a.apply() }()
+
+		fake.ReadFrame(t, 7, 3*time.Second) // drain the request, send nothing back
+
+		if err := <-applyDone; err != nil { // blocks ~ex2RTCReplyTimeout
+			t.Fatalf("rtc %q: apply: %v", sub, err)
+		}
+		outW.Close()
+		os.Stdout = origOut
+		out := <-outCh
+
+		if !strings.Contains(out, "no reply") {
+			t.Errorf("rtc %q: stdout=%q, want a \"no reply\" message", sub, out)
+		}
+	}
+}
+
+// Mirrors TestRun_RealRun_EX2FanRPM_DecodeFailurePrintsGenericMessage -
+// covers both "r" and "s" since neither reaches rtc.SetSystemTime
+// when the reply doesn't decode.
+func TestRun_RealRun_RTCReadAndSync_DecodeFailurePrintsGenericMessage(t *testing.T) {
+	for _, sub := range []string{"r", "s"} {
+		fake := fakemcu.New(t)
+
+		a, code := buildRTCAction(board.EX2, fake.SlavePath, []string{sub}, false)
+		if code != exitOK || a == nil {
+			t.Fatalf("rtc %q: buildRTCAction: code=%d", sub, code)
+		}
+
+		origOut := os.Stdout
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		os.Stdout = outW
+		outCh := make(chan string, 1)
+		go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+		applyDone := make(chan error, 1)
+		go func() { applyDone <- a.apply() }()
+
+		fake.ReadFrame(t, 7, 3*time.Second)
+		// Same genuinely-unrecoverable headless tail as
+		// mcu.TestEX2DecodeDateAndTime_RejectsShortOrMalformedReply's
+		// siblings - too short to contain a full 13-byte frame.
+		unrecoverable := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+		if _, err := fake.Master.Write(unrecoverable); err != nil {
+			t.Fatalf("rtc %q: write fake reply: %v", sub, err)
+		}
+
+		if err := <-applyDone; err != nil {
+			t.Fatalf("rtc %q: apply: %v", sub, err)
+		}
+		outW.Close()
+		os.Stdout = origOut
+		out := <-outCh
+
+		if !strings.Contains(out, "couldn't decode a time") {
+			t.Errorf("rtc %q: stdout=%q, want the generic decode-failure message", sub, out)
+		}
 	}
 }
 
 func TestRun_RTCUnsupportedOnEX2U(t *testing.T) {
-	code, _, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-r", "write"})
+	code, _, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-r", "w"})
 	if code != exitUnsupported {
 		t.Errorf("code=%d, want %d", code, exitUnsupported)
 	}
@@ -587,7 +814,7 @@ func TestRun_RTCUnsupportedOnEX2U(t *testing.T) {
 func TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	code, out, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-D", "-r", "write"})
+	code, out, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-D", "-r", "w"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
 	}
@@ -628,7 +855,7 @@ func TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted(t *testing.T) {
 func TestRun_RTCWrite_TwoChainedActions_EachSendsItsOwnDebugPrintedFrame(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	code, out, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-D", "-r", "write", "-r", "write"})
+	code, out, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-D", "-r", "w", "-r", "w"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
 	}
@@ -1212,7 +1439,7 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 		{"-b", "ex4", "--serial", bad, "-f", "2"},   // found missing via go tool cover: EX4's fan apply() had no coverage of mcu.Open's error branch at all
 		{"-b", "ex2u", "--serial", bad, "-l", "on"}, // same gap, EX2U's led apply()
 		{"-b", "ex4", "--serial", bad, "-d", "hi"},
-		{"-b", "ex4", "--serial", bad, "-r", "write"},
+		{"-b", "ex4", "--serial", bad, "-r", "w"},
 		{"-b", "ex2", "--serial", bad, "-f", "rpm"},                // same gap, buildEX2FanRPMAction's apply()
 		{"-b", "ex2", "--serial", bad, "-l", "power", "red", "on"}, // same gap, buildEX2PowerLEDAction's apply()
 		{"-b", "ex2u", "--serial", bad, "-t"},                      // same gap, buildTempAction's apply()
@@ -1466,11 +1693,13 @@ func TestRun_ActionMissingTrailingArgs(t *testing.T) {
 }
 
 func TestRun_RTCWrongSubcommand(t *testing.T) {
-	// Only "write" is a recognized rtc subcommand right now (no read
-	// support - see SPEC.md); anything else is a usage error on every
-	// board, dry-run or not, since it's a malformed command, not a
-	// "would fail" semantic case.
-	for _, bad := range []string{"read", "sync", "WRITE", ""} {
+	// Only w/r/s (matching the real vendor `rtc` tool's own letters -
+	// see README.md/SPEC.md) are recognized rtc subcommands; anything
+	// else is a usage error on every board, dry-run or not, since
+	// it's a malformed command, not a "would fail" semantic case. The
+	// old full words ("write"/"read"/"sync") are deliberately included
+	// here, not accepted as aliases.
+	for _, bad := range []string{"write", "read", "sync", "W", ""} {
 		code, _, errOut := captureRun(t, []string{"-b", "ex4", "-n", "-r", bad})
 		if code != exitUsage {
 			t.Errorf("rtc %q: code=%d err=%q, want %d", bad, code, errOut, exitUsage)
@@ -1698,7 +1927,7 @@ func TestParseArgs_ShortAndLongFormsAreEquivalent(t *testing.T) {
 	pairs := [][2][]string{
 		{{"-b", "ex4", "-f", "2"}, {"--board", "ex4", "--fan", "2"}},
 		{{"-b", "ex4", "-d", "hi"}, {"--board", "ex4", "--display", "hi"}},
-		{{"-b", "ex4", "-r", "write"}, {"--board", "ex4", "--rtc", "write"}},
+		{{"-b", "ex4", "-r", "w"}, {"--board", "ex4", "--rtc", "w"}},
 		{{"-b", "ex4", "-l", "power", "blue", "on"}, {"--board", "ex4", "--led", "power", "blue", "on"}},
 	}
 	for _, pair := range pairs {
@@ -1952,7 +2181,7 @@ func TestRun_ReadmeExamplesActuallyWork(t *testing.T) {
 		{"-b", "ex4", "-f", "2"},
 		{"-b", "ex4", "--led", "power", "blue", "on"},
 		{"-b", "ex4", "--display", "Booting..."},
-		{"-b", "ex4", "-r", "write"},
+		{"-b", "ex4", "-r", "w"},
 		{"-b", "ex2", "--led", "power", "blue", "on", "-f", "1"},
 		{"-b", "ex4", "-n", "-D", "--led", "power", "blue", "on"},
 	}
@@ -2044,7 +2273,7 @@ func TestRun_AllFourActionTypesChained(t *testing.T) {
 		"--led", "power", "blue", "on",
 		"-f", "2",
 		"-d", "Booting...",
-		"-r", "write",
+		"-r", "w",
 	})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
@@ -2086,7 +2315,7 @@ func TestRun_AllFourActionTypesChained(t *testing.T) {
 func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	code, _, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-f", "2", "-d", "Hi", "-r", "write"})
+	code, _, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-f", "2", "-d", "Hi", "-r", "w"})
 	if code != exitOK {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}

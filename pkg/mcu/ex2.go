@@ -22,6 +22,24 @@ var (
 	ex2ThermalGet   = legacyCmd{"ThermalGet", 0x03, 0x08, 0x00, 0x00, 0x00}
 	ex2FanStatusGet = legacyCmd{"FanStatusGet", 0x03, 0x09, 0x00, 0x00, 0x00}
 
+	// ex2RDateAndTime/ex2WDateAndTime: EX2's shared "group 2" RTC
+	// commands - CONFIRMED via live strace of the real `rtc -r`/`rtc
+	// -w` on real EX2 hardware (previously unconfirmed - see SPEC.md's
+	// now-resolved "unresolved" item 2).
+	//
+	// WDateAndTime's B7 here (0x07) is a CORRECTION to SPEC.md's own
+	// table dump, which recorded 0x01 (the same as RDateAndTime's row)
+	// for this field: the real wire capture of `rtc -w` shows the
+	// actual transmitted byte at that position is 0x07, not 0x01 -
+	// same byte-for-byte shape as EX4's WDateAndTime
+	// (FA b4 b5 b6 b7 <7 BCD bytes> FB via buildDateTimeFrame), just a
+	// different b4/b5/b6/b7. RDateAndTime's own B7=0x01 WAS confirmed
+	// correct by the same capture (its 7-byte request frame matches
+	// the table exactly - it uses buildFixedFrame, not
+	// buildDateTimeFrame, since a read has no payload to send).
+	ex2RDateAndTime = legacyCmd{"RDateAndTime", 0x01, 0x08, 0x01, 0x01, 0x00}
+	ex2WDateAndTime = legacyCmd{"WDateAndTime", 0x01, 0x08, 0x02, 0x07, 0x00}
+
 	// ex2NewPWRLed is EX2's chassis POWER LED command - NOT a
 	// /dev/mem GPIO poke the way pkg/led's "power" zone assumed (that
 	// assumption, from a static libshare.so decompile, was never
@@ -45,16 +63,6 @@ const (
 )
 
 // EX2 is a legacy-protocol client bound to EX2's command table.
-//
-// NOTE: EX2's RDateAndTime/WDateAndTime are intentionally NOT exposed
-// here yet. They share one dispatch group in the real binary (unlike
-// EX4's split groups 1/2), and this tool has no confirmed worked
-// byte example for EX2's write-side framing the way it does for
-// EX4's (see ex4.go's SetDateAndTime) - only the table's header bytes
-// are known. Guessing the payload layout from EX4's by analogy would
-// violate this project's own rule (see SPEC.md): never guess an MCU
-// frame layout without a live capture. rtc support for EX2 needs
-// that capture first.
 type EX2 struct{ p *Port }
 
 func NewEX2(p *Port) *EX2 { return &EX2{p: p} }
@@ -115,7 +123,7 @@ func (m *EX2) FanStatusReply(timeout time.Duration) ([]byte, error) {
 // interleave an unsolicited, unrelated `FA 30 00 00 00 00 FB` frame
 // with this one, in any order - see findFrame's own doc comment.
 func EX2DecodeFanRPM(reply []byte) (int, error) {
-	frame, err := findFrame(reply, ex2FanStatusGet.B4, ex2FanStatusGet.B5)
+	frame, err := findFrame(reply, []byte{ex2FanStatusGet.B4, ex2FanStatusGet.B5}, 7)
 	if err != nil {
 		return 0, err
 	}
@@ -124,6 +132,79 @@ func EX2DecodeFanRPM(reply []byte) (int, error) {
 		return 0, nil
 	}
 	return 300000 / int(period), nil
+}
+
+// EX2DateTimeRequestFrame is RDateAndTime's fixed request frame -
+// the pure builder -n/--dry-run and -D/--debug use.
+func EX2DateTimeRequestFrame() []byte { return buildFixedFrame(ex2RDateAndTime) }
+
+// RequestDateAndTime sends RDateAndTime's request.
+func (m *EX2) RequestDateAndTime() error {
+	return sendLegacy(m.p, buildFixedFrame(ex2RDateAndTime))
+}
+
+// DateAndTimeReply sends RDateAndTime's request and returns whatever
+// raw bytes the MCU replies with within timeout - possibly none.
+// Deliberately returns the UNDECODED bytes; see EX2DecodeDateAndTime
+// for the decode, same split as FanStatusReply/EX2DecodeFanRPM.
+func (m *EX2) DateAndTimeReply(timeout time.Duration) ([]byte, error) {
+	return m.p.sendAndRecv(m.RequestDateAndTime, timeout)
+}
+
+// EX2DecodeDateAndTime decodes an RDateAndTime reply (as returned by
+// DateAndTimeReply) into year/mon/dom/dow/hour/min/sec.
+//
+// Hardware-confirmed: a live strace of the real `rtc -r` on real EX2
+// hardware, while it printed "rtc: RTC time = 2026/11/2 Mon
+// 13:39:43", captured the reply
+// FA 01 08 01 01 43 39 13 01 02 11 26 FB - the request's own 5-byte
+// header (FA b4 b5 b6 b7) echoed back verbatim, followed by the SAME
+// 7-field BCD payload order WDateAndTime's write side uses
+// (sec,min,hour,dow,dom,mon,year - see EX2DateTimeFrame), confirmed
+// field-by-field against the printed date: sec=0x43->43, min=0x39->39,
+// hour=0x13->13, dow=0x01 (Monday, same 0-6 convention as the write
+// side), dom=0x02->2, mon=0x11->11, year=0x26->2026 - an exact match
+// across all 7 fields, not a partial or coincidental one.
+//
+// Scans reply for the matching frame via findFrame rather than
+// assuming it starts at offset 0 - real EX2 hardware was found to
+// interleave the same unsolicited `FA 30 00 00 00 00 FB` frame seen
+// around FanStatusGet's reply (see findFrame's own doc comment).
+func EX2DecodeDateAndTime(reply []byte) (year, mon, dom, dow, hour, min, sec int, err error) {
+	frame, err := findFrame(reply, []byte{ex2RDateAndTime.B4, ex2RDateAndTime.B5, ex2RDateAndTime.B6, ex2RDateAndTime.B7}, 13)
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, 0, err
+	}
+	sec = fromBCD(frame[5])
+	min = fromBCD(frame[6])
+	hour = fromBCD(frame[7])
+	dow = fromBCD(frame[8])
+	dom = fromBCD(frame[9])
+	mon = fromBCD(frame[10])
+	year = 2000 + fromBCD(frame[11])
+	return year, mon, dom, dow, hour, min, sec, nil
+}
+
+// EX2DateTimeFrame builds WDateAndTime's frame without sending it -
+// see buildDateTimeFrame's doc comment for the wire layout. year is
+// the full year (e.g. 2026); only the low 2 digits travel on the
+// wire (BCD). Mirrors EX4DateTimeFrame exactly (same validation, same
+// field order) - see ex2WDateAndTime's own doc comment for how its
+// header differs from EX4's.
+func EX2DateTimeFrame(year, mon, dom, dow, hour, min, sec int) ([]byte, error) {
+	if err := validateDateTimeFields(year, mon, dom, dow, hour, min, sec); err != nil {
+		return nil, err
+	}
+	return buildDateTimeFrame(ex2WDateAndTime, year, mon, dom, dow, hour, min, sec), nil
+}
+
+// SetDateAndTime writes EX2's RTC.
+func (m *EX2) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
+	frame, err := EX2DateTimeFrame(year, mon, dom, dow, hour, min, sec)
+	if err != nil {
+		return err
+	}
+	return sendLegacy(m.p, frame)
 }
 
 // EX2PowerLEDFrames builds the two NewPWRLed frames the real `led`
