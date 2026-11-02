@@ -143,11 +143,29 @@ func (m *EX2) RequestDateAndTime() error {
 	return sendLegacy(m.p, buildFixedFrame(ex2RDateAndTime))
 }
 
+// ex2RTCRequestSettleDelay is a pause before sending RDateAndTime's
+// request, every time, not just when actually chained in rapid
+// succession - same unconditional shape as ex2PowerLEDInterFrameDelay.
+//
+// Unlike this project's other timing constants, this one is NOT a
+// captured, confirmed hardware value - it's a defensive heuristic. A
+// real chained run (six `-r r` actions, zero think-time apart in one
+// process) found the MCU's replies to rapid consecutive
+// RDateAndTime requests becoming corrupted/stale after the first one
+// (a single isolated request always worked - see BUILDING.md for
+// the full capture). This protocol has no checksum or
+// acknowledgement at all (same reasoning as
+// ex2PowerLEDInterFrameDelay), so nothing but timing protects a
+// second request from landing while the MCU is still settling from
+// the first.
+const ex2RTCRequestSettleDelay = 300 * time.Millisecond
+
 // DateAndTimeReply sends RDateAndTime's request and returns whatever
 // raw bytes the MCU replies with within timeout - possibly none.
 // Deliberately returns the UNDECODED bytes; see EX2DecodeDateAndTime
 // for the decode, same split as FanStatusReply/EX2DecodeFanRPM.
 func (m *EX2) DateAndTimeReply(timeout time.Duration) ([]byte, error) {
+	time.Sleep(ex2RTCRequestSettleDelay)
 	return m.p.sendAndRecv(m.RequestDateAndTime, timeout)
 }
 

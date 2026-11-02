@@ -416,6 +416,23 @@ fix) and `TestPort_RecvBytes_ReturnsAfterQuietWindowNotFullTimeout`
 (confirms the fix doesn't make every reply as slow as a genuine
 "nothing ever arrives" timeout).
 
+After that fix shipped, chaining six `-r r` actions in one command
+(zero think-time between them) surfaced a seventh issue: only the
+first request got a clean reply - every one after it came back
+corrupted/stale (fragments with no fresh header at all, several of
+them byte-for-byte identical to each other), while a single isolated
+`-r r` always worked. Unlike every other fix in this project, this
+one is NOT pinned to a specific decoded capture - the user who found
+it asked for a heuristic pacing fix directly rather than a further
+capture-and-diagnose round. Added `ex2RTCRequestSettleDelay` (300ms,
+same unconditional-every-time shape as `ex2PowerLEDInterFrameDelay`,
+and the same underlying reasoning: this protocol has no checksum or
+acknowledgement at all, so nothing but timing protects a second
+request from landing while the MCU is still settling from the
+first) - a defensive heuristic, explicitly not a confirmed hardware
+value, called out as such in its own doc comment so a future reader
+doesn't mistake it for one.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.
