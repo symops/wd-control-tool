@@ -208,3 +208,76 @@ func TestPort_FlushInput_DoesNotErrorAndDrainsPendingBytes(t *testing.T) {
 		t.Fatalf("recvBytes returned %d byte(s), want exactly 1 (the pre-flush bytes should have been discarded)", got)
 	}
 }
+
+// Regression test for the exact real-hardware bug report this
+// project got: a real EX2 RDateAndTime reply (13 bytes) was caught
+// truncated to 8 bytes by a single Read() call that returned before
+// the rest of the reply had arrived on the wire. Writes the reply
+// one byte at a time with a real inter-byte gap (1ms - the same
+// order of magnitude as the ~0.5-0.7ms gaps this project's own
+// strace captures show, not just an instant bulk write that would
+// let this pass for the wrong reason) and confirms recvBytes
+// assembles the FULL reply instead of returning whatever the first
+// Read() happened to catch.
+func TestPort_RecvBytes_AssemblesReplyArrivingOverMultipleReads(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	want := []byte{0xFA, 0x01, 0x08, 0x01, 0x01, 0x43, 0x39, 0x13, 0x01, 0x02, 0x11, 0x26, 0xFB}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, b := range want {
+			if _, err := fake.Master.Write([]byte{b}); err != nil {
+				t.Errorf("write byte %#x: %v", b, err)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	buf := make([]byte, 64)
+	n, err := p.recvBytes(buf, 3*time.Second)
+	<-done
+	if err != nil {
+		t.Fatalf("recvBytes: %v", err)
+	}
+	if n != len(want) {
+		t.Fatalf("recvBytes returned %d byte(s) (% X), want the full %d-byte reply (% X)", n, buf[:n], len(want), want)
+	}
+	if string(buf[:n]) != string(want) {
+		t.Errorf("recvBytes = % X, want % X", buf[:n], want)
+	}
+}
+
+// The other side of interByteQuietWindow: once a reply genuinely
+// stops (not just a slow byte in transit), recvBytes must not wait
+// out the full outer timeout before returning what it has - that
+// would make every reply as slow as the "nothing ever arrives" case.
+// Writes only a prefix, stays silent, and confirms recvBytes returns
+// well before the 3-second outer timeout (bounded by
+// interByteQuietWindow instead).
+func TestPort_RecvBytes_ReturnsAfterQuietWindowNotFullTimeout(t *testing.T) {
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	prefix := []byte{0xFA, 0x01, 0x08, 0x01, 0x01}
+	if _, err := fake.Master.Write(prefix); err != nil {
+		t.Fatalf("write prefix: %v", err)
+	}
+
+	start := time.Now()
+	buf := make([]byte, 64)
+	n, err := p.recvBytes(buf, 3*time.Second)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("recvBytes: %v", err)
+	}
+	if n != len(prefix) {
+		t.Fatalf("recvBytes returned %d byte(s), want exactly the %d-byte prefix (no more was ever sent)", n, len(prefix))
+	}
+	if elapsed >= 3*time.Second {
+		t.Errorf("recvBytes took %v, want well under the 3s outer timeout (bounded by interByteQuietWindow instead)", elapsed)
+	}
+}

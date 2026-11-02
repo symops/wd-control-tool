@@ -388,6 +388,34 @@ deliberately NOT exercised by this project's own automated tests,
 the same reasoning as `pkg/regio.Open`'s real register writes: no
 test run should change the clock of whatever machine runs it.
 
+A real-hardware test of `-r r` right after this all shipped found a
+sixth bug, in `recvBytes` itself (`pkg/mcu/serial.go`), not specific
+to RTC: a real `RDateAndTime` reply (13 bytes) came back truncated to
+8 bytes in a user's own `-D` capture (`reply=FA 01 08 01 01 47 12
+14`, no trailing `FB`) - `EX2DecodeDateAndTime` correctly refused to
+decode the genuinely incomplete frame rather than guess, but the real
+bug was one layer down: `Open` configures `VMIN=1`/`VTIME=0`, so a
+single `Read()` call returns as soon as just ONE byte is available -
+it does not wait for a longer reply to finish arriving. This had
+been silently "working" for every 7-byte reply this project had
+decoded so far (temp, fan RPM) only because Go's own scheduling
+latency happened to be slower than the inter-byte gap often enough
+that several bytes were usually already queued by the time the
+goroutine's `Read()` fired - not a guarantee, just a lucky margin
+that a longer 13-byte reply exposed. Fixed by having `recvBytes` loop
+(`readOnce`, factored out) across multiple `Read()` calls, applying a
+short `interByteQuietWindow` (50ms - a heuristic margin, not a
+captured value, chosen generous against the sub-millisecond gaps
+this project HAS captured) between successive bytes rather than
+settling for whatever the first `Read()` returned. See
+`pkg/mcu/serial_test.go`'s
+`TestPort_RecvBytes_AssemblesReplyArrivingOverMultipleReads` (writes
+a real capture byte-at-a-time with a 1ms gap - confirmed to fail
+against the pre-fix code, returning just the first byte, before this
+fix) and `TestPort_RecvBytes_ReturnsAfterQuietWindowNotFullTimeout`
+(confirms the fix doesn't make every reply as slow as a genuine
+"nothing ever arrives" timeout).
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

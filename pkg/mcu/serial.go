@@ -196,15 +196,69 @@ func (p *Port) sendAndRecv(send func() error, timeout time.Duration) ([]byte, er
 	return buf[:n], nil
 }
 
-// recvBytes reads whatever bytes arrive on the port within timeout.
-// Zero bytes with a nil error is a normal "nothing arrived in time"
-// outcome, not a failure - independent of whether this project has a
-// decoder for the reply at all: EX2U.TempReply's reply IS decoded
+// interByteQuietWindow is how long recvBytes waits for one MORE byte
+// after at least one has already arrived, before deciding a reply is
+// complete rather than still arriving.
+//
+// Needed because Open configures VMIN=1/VTIME=0, so a single Read()
+// call returns as soon as just one byte is available - it does NOT
+// wait for a longer reply to finish arriving. Confirmed to actually
+// bite in practice, not just in theory: a real EX2 RDateAndTime
+// reply (13 bytes) was caught truncated to 8 bytes in a user's own
+// -D capture on real hardware (`reply=FA 01 08 01 01 47 12 14`, no
+// trailing FB) - EX2DecodeDateAndTime correctly refused to decode
+// the genuinely incomplete frame rather than guess, but the real fix
+// is here: keep reading instead of settling for whatever one Read()
+// happened to return.
+//
+// Unlike this project's other timing constants, this one is NOT a
+// captured, confirmed hardware value - it's a heuristic margin,
+// chosen generous (tens of milliseconds) against the sub-millisecond
+// inter-byte gaps this project HAS captured (see
+// legacyInterByteDelay, and the strace timestamps in SPEC.md/
+// BUILDING.md), to also cover Go-scheduling/OS jitter on whatever
+// machine runs this tool, which no capture can bound precisely.
+const interByteQuietWindow = 50 * time.Millisecond
+
+// recvBytes reads a reply within timeout. Zero bytes with a nil
+// error is a normal "nothing arrived in time" outcome, not a failure
+// - independent of whether this project has a decoder for the reply
+// at all: EX2U.TempReply's reply IS decoded
 // (EX2UDecodeTempFahrenheit/Celsius), but every real end-to-end run
 // of this tool's own `-t` command has still seen nothing come back
 // within the timeout (see buildTempAction's own CLI-level test for
 // that), same as it would for a genuinely undecoded reply. A non-nil
 // error means the read itself failed.
+//
+// Loops across multiple Read() calls via readOnce, not just one -
+// see interByteQuietWindow's doc comment for why one Read() isn't
+// enough to reliably capture a reply longer than a single byte.
+// After the first byte(s) arrive, each subsequent readOnce uses
+// interByteQuietWindow instead of the caller's own timeout - once
+// that elapses with nothing new, or buf fills, the reply is
+// considered complete.
+func (p *Port) recvBytes(buf []byte, timeout time.Duration) (int, error) {
+	total, err := p.readOnce(buf, timeout)
+	if err != nil || total == 0 {
+		return total, err
+	}
+	for total < len(buf) {
+		n, err := p.readOnce(buf[total:], interByteQuietWindow)
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			break
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// readOnce is recvBytes' single-Read() building block, factored out
+// so it can be called both for the initial "wait for anything at
+// all" read (the caller's own timeout) and for each subsequent "is
+// there more" read (interByteQuietWindow).
 //
 // Open configures VMIN=1/VTIME=0, so the underlying Read blocks
 // until at least one byte is available - there is no kernel-level
@@ -221,8 +275,11 @@ func (p *Port) sendAndRecv(send func() error, timeout time.Duration) ([]byte, er
 // (the process exits right after run() returns, taking the goroutine
 // with it), but calling recvBytes again on the same Port before an
 // earlier timed-out Read has actually returned risks two concurrent
-// Reads racing for the same incoming bytes.
-func (p *Port) recvBytes(buf []byte, timeout time.Duration) (int, error) {
+// Reads racing for the same incoming bytes - same risk this already
+// carried before recvBytes looped internally, just now also possible
+// between recvBytes' own internal readOnce calls if a caller reuses
+// a Port concurrently, which nothing in this project's own CLI does.
+func (p *Port) readOnce(buf []byte, timeout time.Duration) (int, error) {
 	type result struct {
 		n   int
 		err error

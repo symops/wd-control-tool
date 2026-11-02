@@ -433,6 +433,17 @@ func TestEX2_DateAndTimeReply_ReturnsRawReplyBytes(t *testing.T) {
 	}
 }
 
+// Mirrors TestEX4_SetDateAndTime_PropagatesValidationError - found
+// via the same `go tool cover` pass, scoped to pkg/mcu's own package
+// coverage.
+func TestEX2_SetDateAndTime_PropagatesValidationError(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+	if err := m.SetDateAndTime(2026, 13, 1, 0, 0, 0, 0); err == nil { // month 13
+		t.Error("SetDateAndTime with month=13: want error, got nil")
+	}
+}
+
 func TestEX2_SetDateAndTime_OverPTY(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2(OpenFile(fake.Slave))
