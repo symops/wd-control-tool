@@ -579,48 +579,65 @@ vendor tool directly, not by reasoning about it.
   other rtc subcommand), found via a direct side-by-side with the
   vendor tool. **A `RDateAndTime` read immediately following a
   `WDateAndTime` write can intermittently come back with some
-  fields right and others wrong** - repeated real-hardware testing
-  (`rtc r`+`rtc w`+`rtc s` chained, many attempts, several seconds
-  apart) showed this reproduces every few attempts. **Root cause
-  CONFIRMED** (not just suspected) via this project's own
-  `WD_MCU_TRACE` byte-level tracing (`pkg/mcu/serial.go` -
-  deliberately not `strace`: wrapping the whole CLI in `strace` to
-  capture this made the corruption stop reproducing across 3 full
-  50-iteration runs, almost certainly `strace`'s own per-syscall
-  overhead giving the race more breathing room than real use ever
-  has - so a lightweight in-process trace was added instead, with no
-  ptrace involved): a real capture showed `sec`/`min` read live off
-  the RTC chip every time, while `hour`/`dow`/`dom`/`mon`/`year` were
-  FROZEN at a stale, well-formed snapshot across two separate reads
-  1.3s apart (from two separate process invocations), with `sec`
-  ticking forward normally between them - and this tool's own
-  flush/send/recv sequence around both reads was completely clean (0
-  bytes pending at flush, one well-formed frame, matching header),
-  ruling out anything on this tool's own side (in particular: no
-  unread `WDateAndTime` reply left lingering in the kernel's RX
-  queue to contaminate the next read - there never was a reply at
-  all, nothing came back after a write until the fix below added a
-  deliberate readback). The SAME trace shows the very next
-  `WDateAndTime` write immediately clears the freeze - confirming
-  this is a genuine bug in the MCU firmware's own RTC-read
-  composition, not a transport/timing issue: a flat 300ms pause (two
-  different placements, both since reverted) and inter-byte write
-  pacing up to 10ms/byte - 1000x the vendor's own 10us, also since
-  reverted - were both tried on real hardware first and had zero
-  effect on the failure rate. **Fixed** (not just mitigated) in
-  `(*mcu.EX2).SetDateAndTime` (`pkg/mcu/ex2.go`,
-  `ex2RTCVerifyAttempts`): since a write is what clears the freeze,
-  every write now reads straight back what it just sent (so it knows
-  the exact expected value, not a guessed "plausible" one) and
-  re-sends the write if the readback doesn't match, up to 3
-  attempts - this does NOT reintroduce the implausible-year sanity
-  check rejected earlier (that one risked misdiagnosing a genuinely
-  dead RTC battery as corruption): it only ever compares against a
-  value this same call just wrote, never against an absolute
-  plausibility threshold, so a standalone read with no preceding
-  write in the same process (e.g. a cold `rtc -s` at boot) is
-  unprotected by this fix and must be treated as a separate,
-  currently-open risk - see "Unresolved" below.
+  fields right and others wrong, or with no reply at all** -
+  repeated real-hardware testing (`rtc r`+`rtc w`+`rtc s` chained,
+  many attempts, several seconds apart, both as separate process
+  invocations and chained in one process) showed this reproduces
+  every few attempts (roughly 5-10 per 50). **Root cause CONFIRMED**
+  (not just suspected), and it is on THIS tool's own side, not the
+  MCU's - an early diagnosis blamed a stale RTC-read cache inside
+  the MCU firmware, but that was wrong (see below for how it was
+  disproven). The real cause: `sendBytes` (`pkg/mcu/serial.go`)
+  returns as soon as the last byte of a frame is handed to the
+  kernel's write() - at 115200 baud a 13-byte frame still takes
+  ~1.1ms to actually finish shifting out over the wire, and `write()`
+  returning only means it was queued, not transmitted. `SetDateAndTime`'s
+  own verify-read (added as the first fix attempt, see below) calls
+  `flushInput()` (`ioctl(TCIFLUSH)`) under 1ms after that write
+  returns, to discard anything stale before sending the read request -
+  on this UART driver, flushing INPUT that soon after a write can
+  also corrupt the tail of that write's STILL-IN-FLIGHT OUTPUT (not
+  just POSIX-documented behavior, but confirmed by testing: the MCU
+  then never receives a complete, valid command at all, which is why
+  failed attempts got back only the unrelated unsolicited `FA 30 00
+  00 00 00 FB` noise frame and nothing else - not a stale-but-
+  decodable reply, a genuinely incomplete command on the MCU's end).
+  **Fixed** in `Port.sendBytes`: it now drains (`ioctl(TCSBRK, 0)`,
+  the kernel's own `tcdrain()` equivalent - waits exactly as long as
+  transmission actually takes, not a fixed sleep) before returning,
+  so by the time any caller's `flushInput()` runs, the write it just
+  sent has genuinely, physically finished going out. Confirmed on
+  real hardware: multiple full 50-iteration `rtc r`+`rtc w`+`rtc s`
+  stress runs with zero corruption after this fix, where the same
+  test reliably reproduced the bug every run before it.
+
+  The MCU-firmware-cache theory was disproven by comparing this
+  tool's own byte-level trace (`WD_MCU_TRACE`, added specifically
+  because wrapping the whole CLI in `strace` made the corruption
+  stop reproducing across 3 full 50-iteration runs - almost
+  certainly `strace`'s own per-syscall overhead giving the race more
+  breathing room than real use ever has, so a no-ptrace in-process
+  trace was built instead) against the real vendor `up_send_daemon`/
+  `up_read_daemon` (found by tracing `/tmp/msg_info.txt`'s PID,
+  confirmed as a second long-lived read daemon by name via `ps`):
+  the vendor's own `RtcRetryLog` showed it retries on plain timeouts
+  routinely too (not rare), ruling out "the vendor never has this
+  problem" as a useful signal either way. Matching the vendor's own
+  `open()`/`termios` config exactly (no `O_SYNC`, `IGNPAR` set) was
+  tried and had zero effect - a dead end, since by then the real fix
+  (draining before flushing) had already been found by direct
+  reasoning about the write path's own timing, not by vendor
+  comparison. A write-then-read-verify loop
+  (`(*mcu.EX2).SetDateAndTime`, `ex2RTCVerifyAttempts`) was added as
+  the first mitigation attempt and is kept as defense in depth (it
+  now almost never needs to retry at all): it reads straight back
+  what it just wrote and re-sends the write if the readback doesn't
+  match, up to 3 attempts - this does NOT reintroduce the
+  implausible-year sanity check rejected earlier in this
+  investigation (that one risked misdiagnosing a genuinely dead RTC
+  battery as corruption): it only ever compares against a value this
+  same call just wrote, never against an absolute plausibility
+  threshold.
 - **Read (RTC -> SYS)**: confirmed for **EX2 only** - a live capture
   of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43) decoded the
   reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` - the request's own
@@ -700,17 +717,20 @@ display at all.
    (EX2/EX4)", "Power LED".)
 6. EX2U's `sys_reboot` byte sequence was never captured (see EX2U
    protocol table) - do not guess it if ever needed.
-7. **EX2's `RDateAndTime` stale-snapshot bug, standalone-read case**:
-   a write-then-verify fix now exists for `SetDateAndTime` itself
-   (see "RTC" above, `ex2RTCVerifyAttempts`), but a bare read with no
-   preceding write in the SAME process (e.g. a cold `rtc -s` at boot,
-   or any read by a completely different program after an earlier,
-   unrelated write) has no defense: this tool cannot locally tell a
-   genuinely stale MCU snapshot apart from a genuinely old RTC value
-   (e.g. a dead battery) without guessing at plausibility, which was
-   deliberately rejected once already (see BUILDING.md) for risking
-   exactly that misdiagnosis. Not fixed - a real limitation of this
-   approach, not an oversight.
+7. ~~EX2's `RDateAndTime` write-then-read corruption~~ - **resolved**:
+   see "RTC" above. The real cause (`Port.sendBytes` returning before
+   a write had actually finished transmitting, so a `flushInput()`
+   issued shortly after could corrupt the tail of it) is fixed in
+   `sendBytes` itself (draining before returning), which protects
+   every caller - not just `SetDateAndTime`'s own write-then-verify,
+   but also a standalone read by a completely different program
+   shortly after this tool wrote the RTC, since the write this tool
+   sent will have genuinely finished by the time it returns. A
+   formerly-tracked residual gap (no defense for a bare read with no
+   preceding write by THIS tool in the same process, e.g. a cold
+   `rtc -s` at boot) no longer has a known failure mode to defend
+   against, now that the actual cause is understood and fixed at the
+   source rather than papered over.
 
 ## Author
 

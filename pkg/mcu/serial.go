@@ -65,7 +65,15 @@ func Open(path string, baud int) (*Port, error) {
 		return nil, fmt.Errorf("mcu: unsupported baud rate %d", baud)
 	}
 
-	f, err := os.OpenFile(path, os.O_RDWR|unix.O_NOCTTY|unix.O_SYNC, 0)
+	// O_SYNC: deliberately NOT passed here (DIAGNOSTIC change, testing
+	// against the EX2 RTC write-then-read corruption investigation) -
+	// a live strace of the real up_read_daemon/up_send_daemon opening
+	// this same /dev/ttyS1 showed O_RDWR|O_NOCTTY|O_LARGEFILE, no
+	// O_SYNC. O_LARGEFILE itself is a no-op on a character device (it
+	// only affects regular-file offset semantics), not reproduced here
+	// for that reason - only O_SYNC's removal is the real, tested
+	// difference from what this project had before.
+	f, err := os.OpenFile(path, os.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("mcu: open %s: %w", path, err)
 	}
@@ -89,8 +97,19 @@ func Open(path string, baud int) (*Port, error) {
 	// block forever (the VMIN=1/VTIME=0 this project used until it
 	// caused two separate confirmed bugs) was replaced with one that's
 	// always bounded by the kernel itself.
+	// Iflag=IGNPAR: DIAGNOSTIC change, same investigation as O_SYNC's
+	// removal above - the same real vendor daemon strace showed
+	// c_iflag=IGNPAR, not 0 (this project's own value until now).
+	// IGNPAR's documented effect is "discard a character with a
+	// parity or framing error" when INPCK is also set - INPCK is NOT
+	// set here (matching the vendor, which also doesn't set it), so
+	// this may be a no-op per strict POSIX, but Linux's actual tty
+	// line discipline has been known to behave differently for
+	// framing errors specifically depending on this bit even without
+	// INPCK - worth testing directly on real hardware rather than
+	// reasoning about it, per this project's own house rule.
 	t := unix.Termios{
-		Iflag:  0,
+		Iflag:  unix.IGNPAR,
 		Oflag:  0,
 		Cflag:  b | unix.CS8 | unix.CREAD | unix.CLOCAL,
 		Lflag:  0,
@@ -142,6 +161,27 @@ func (p *Port) sendBytes(b []byte, pace func()) error {
 		if pace != nil {
 			pace()
 		}
+	}
+	// DIAGNOSTIC: tcdrain() equivalent (TCSBRK with a zero arg - NOT a
+	// break signal, that's only sent for a nonzero, non-1 arg; see
+	// tcdrain(3)/termios(3) and the Linux tty_ioctl(4) TCSBRK
+	// description) - waits for the kernel's own output buffer to
+	// actually finish transmitting, not just "queued". write()
+	// returning only means the byte was queued into the driver, not
+	// that it physically left the UART yet (at 115200 baud a 13-byte
+	// frame takes ~1.1ms to actually clock out) - this project's own
+	// EX2 RTC write-then-read corruption investigation found the
+	// verify-read that now follows every write calls flushInput()
+	// (TCIFLUSH) within under 1ms of the write's own last byte being
+	// queued, which could race with the frame still physically being
+	// transmitted. Testing whether draining first (not a fixed sleep -
+	// this returns as soon as transmission is actually done, however
+	// long or short that takes) avoids that race, since two flat
+	// pauses (one before a request, one after a write) and a
+	// deliberately exaggerated inter-byte pace were all tried before
+	// and had zero effect.
+	if err := unix.IoctlSetInt(int(p.f.Fd()), unix.TCSBRK, 0); err != nil {
+		traceEvent("tcdrain failed: %v", err)
 	}
 	return nil
 }

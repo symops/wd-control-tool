@@ -621,11 +621,96 @@ implausible-year sanity-check/retry idea rejected earlier in this
 investigation (see above): that one would have mistaken a genuinely
 dead RTC battery's old-but-real value for corruption; this one only
 ever compares against a value this same call just wrote, so it can
-never misfire on a standalone read. The flip side: a standalone read
-with no preceding write in the same process (a cold `rtc -s` at
-boot, in particular) has no such ground truth available and remains
-unprotected - tracked as open in SPEC.md's "Unresolved" rather than
-guessed at.
+never misfire on a standalone read. The flip side, as understood at
+the time: a standalone read with no preceding write in the same
+process (a cold `rtc -s` at boot, in particular) has no such ground
+truth available and remains unprotected.
+
+**That "MCU firmware cache" diagnosis turned out to be wrong** - it
+explained the symptom (sec/min live, everything else frozen) but not
+the actual mechanism, and the verify-retry fix above, while real
+defense in depth, was not the actual fix. Real-hardware testing kept
+finding the corruption at roughly the same rate (~5-10 per 50)
+regardless: inter-byte write pacing raised to 10ms/byte (1000x the
+vendor's own 10us) had zero effect; a delay inserted specifically
+between `SetDateAndTime`'s own verify-retry attempts, tried at 300ms
+and then deliberately pushed to 5000ms, ALSO had zero effect (the
+failing attempt's reply was consistently nothing but the unsolicited
+noise frame, for the full 5 seconds, every time) - ruling out
+"insufficient settle time" at any magnitude as the mechanism, since
+5 seconds is not a subtle amount of slack. A live-monitoring check
+(polling `/proc` via `fuser`, confirmed fast enough on this hardware
+to actually catch this tool's own ~140ms open-to-close window after
+an earlier `find`-based version proved too slow at ~350ms/scan to
+catch anything at all) found no other process ever holding
+`/dev/ttyS1` open during a failure, ruling out a competing daemon.
+
+Comparing this tool's own `WD_MCU_TRACE` byte-level trace against
+the real vendor daemons directly settled it. The vendor `rtc` CLI
+does not touch `/dev/ttyS1` itself at all - it talks over a SysV
+message queue to `up_send_daemon` (which writes requests) and a
+second, independent `up_read_daemon` (continuously busy-polling
+`/dev/ttyS1` one byte at a time, ~49% CPU, found via `ps` by name
+after locating its PID through `/tmp/msg_info.txt`), with completion
+signaled through yet another IPC path (an `xmldbc` config-database
+round-trip clearing/setting a `/runtime/mcu/ack` key - unrelated to
+the raw UART bytes, just the vendor's own handshake plumbing). The
+vendor's own `/tmp/RtcRetryLog` showed this needs a timeout-retry on
+nearly every single call, not rarely - "the vendor never has this
+problem" was never actually true, it is just hidden well behind a
+persistent daemon architecture and an internal retry loop whose
+failures don't reach the CLI's own stdout. A 30-iteration stress run
+with `strace` attached directly to `up_read_daemon` (filtered to
+raw `read()`/`write()` on its UART fd, parsed byte-by-byte afterward
+with a decoder careful about `strace -x`'s C-string escaping of
+`"`/`\` - an early version of that parser silently dropped exactly
+those two byte values and manufactured a false "frozen field"
+artifact that evaporated once fixed) found the daemon's own 155
+captured replies all correct, no corruption observed - a negative
+result, not proof the vendor is immune, but no positive evidence of
+the MCU-side cache theory either.
+
+The one architectural difference nothing above addressed: the
+vendor's daemons open `/dev/ttyS1` ONCE and keep it open for the
+process's entire lifetime; this tool opens and closes it on every
+single invocation. Deliberately not "fix this by adding a daemon"
+(ruled out directly - this project is moving away from needing one,
+not toward it) - instead, a live strace of the daemons' own startup
+(killed and restarted them under `strace -f` to catch the `open()`+
+`ioctl(TCSETS)` sequence a steady-state attach would miss) was
+compared byte-for-byte against this tool's own `mcu.Open`: the
+vendor's `open()` has no `O_SYNC` (this tool's did), and its
+`c_iflag` is `IGNPAR` (this tool's was 0). Both were matched exactly
+as a test - zero effect, same failure signature, same rate. At this
+point the real cause was found by direct reasoning rather than more
+comparison: the failing verify-read attempts always got back ONLY
+the unsolicited noise frame and nothing else, within a trace already
+showing every step completing cleanly (0 bytes pending at flush, a
+write sent, a read request sent) - meaning the MCU was not sending
+back a stale value at all, it was not responding to a proper command
+because it may never have fully received one. `Port.sendBytes`
+(`pkg/mcu/serial.go`) returns as soon as the last byte is handed to
+the kernel's `write()` - at 115200 baud a 13-byte frame still takes
+~1.1ms to actually finish shifting out over the wire, and `write()`
+returning only means it was queued. `SetDateAndTime`'s own
+verify-read calls `flushInput()` (`ioctl(TCIFLUSH)`) under 1ms after
+that write call returns, specifically to discard anything stale
+before sending the read request - and on this UART driver, an input
+flush issued that soon after a write can also corrupt the tail of
+that write's still-in-flight OUTPUT, which is not documented POSIX
+behavior for `TCIFLUSH` but is what real-hardware testing confirmed.
+**Fixed**: `sendBytes` now drains (`ioctl(TCSBRK, 0)` - the kernel's
+own `tcdrain()` equivalent, waiting exactly as long as transmission
+actually takes, not a fixed sleep, the same principled distinction
+that made this a worth trying after several fixed delays had already
+failed) before returning, so any caller's own `flushInput()` runs
+only after the write it just sent has genuinely finished. Confirmed
+on real hardware: multiple full 50-iteration stress runs with zero
+corruption after this one-line fix, on a test that had reliably
+reproduced the bug on every prior run. The write-then-verify-retry
+loop from the (wrong) MCU-cache diagnosis is kept as defense in
+depth - it is not wrong to have, just not the actual fix, and it now
+essentially never needs to retry at all.
 
 ## What this does NOT cover
 
