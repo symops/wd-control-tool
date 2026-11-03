@@ -102,7 +102,7 @@ against real hardware, not just statically).
 | `sys_shutdown` | `FA 03 03 01 00 00 FB` (confirmed genuine hard power cut, not cosmetic) |
 | `tmp_get_f`/`tmp_get_c` | request: `FA 03 08 00 00 00 FB`; reply: `FA 03 08 00 00 <F> FB` where `<F>` is the temperature in whole-degree Fahrenheit - confirmed via two live captures (`wd-control-tool -b ex2u -t` alongside a simultaneous `mcu_ctl tmp_get_c` on real hardware): `0x56`=86 decimal alongside "Temperature: 30 C", and separately `0x54`=84 decimal alongside "Temperature: 28 C". `tmp_get_c`'s F-to-C conversion **truncates** rather than rounds ((F-32)*5/9 as plain C-style integer division): the first capture couldn't distinguish the two (86°F is exactly 30°C either way), but the second does - 84°F rounds to 29 but truncates to 28, and the vendor reported 28. The reply's 8th byte in both captures was a trailing `0xFA`, not yet explained - see `pkg/mcu/ex2u.go`'s `EX2UDecodeTempFahrenheit`/`EX2UDecodeTempCelsius`. |
 | `fan_set_0/25/50/75/100` | `FA 02 00 <00/40/80/c0/ff> 00 00 FB` |
-| `sys_reboot` | **not captured** - do not guess it |
+| `sys_reboot` | **not captured, not needed** - this feature isn't wanted; do not guess the bytes if that ever changes |
 
 ## EX2/EX4 protocol ("legacy" MCU, `/dev/ttyS1`)
 
@@ -684,15 +684,19 @@ display at all.
    two reuse the same 7-byte `FA .. FB` shape as every request, with
    the answer in byte 5; `RDateAndTime`'s reply is the 13-byte
    `WDateAndTime` shape instead (request header echoed back, 7 BCD
-   fields where the request had its const+FB). Still unknown: the
-   general request/reply correlation mechanism (does every command
-   get a reply, or only reads?), EX2/EX4's other sensor reads
-   (`ThermalGet`/`GetThemister`), EX4's own `RDateAndTime` reply (do
-   not assume it matches EX2's - see "RTC" above), any
-   acknowledgement that a write command was received, and the stray
-   trailing byte seen after EX2U's own `tmp_get` reply (possibly an
-   unprompted second reply - needs another capture to confirm).
-   Closing the rest needs either a full decompile of
+   fields where the request had its const+FB). Still unknown, and
+   **not needed for this tool's current feature set** (so not being
+   chased - same as item 5 below): the general request/reply
+   correlation mechanism (does every command get a reply, or only
+   reads?), EX2/EX4's other sensor reads (`ThermalGet`/
+   `GetThemister`), any acknowledgement that a write command was
+   received, and the stray trailing byte seen after EX2U's own
+   `tmp_get` reply (possibly an unprompted second reply). **Still
+   wanted**, unlike the above: EX4's own `RDateAndTime` reply (do not
+   assume it matches EX2's - see "RTC" above) - needed before EX4's
+   `-r`/`-s` can be implemented, which this tool's user does want
+   eventually (EX4's `-w` alone is next up, not blocked on this).
+   Closing any of the above needs either a full decompile of
    `up_read_daemon`'s `RS232_Read` parsing loop, or (more reliably,
    per this project's own house rule - proven 4 times now) a live
    UART capture of a real reply.
@@ -716,7 +720,9 @@ display at all.
    `NewPWRLed`, b4=`0x26`, is no longer unresolved - see "LED
    (EX2/EX4)", "Power LED".)
 6. EX2U's `sys_reboot` byte sequence was never captured (see EX2U
-   protocol table) - do not guess it if ever needed.
+   protocol table) - **not needed**, this tool's user has confirmed
+   this functionality (and others like it) isn't wanted; don't guess
+   it if that ever changes.
 7. ~~EX2's `RDateAndTime` write-then-read corruption~~ - **resolved**:
    see "RTC" above. The real cause (`Port.sendBytes` returning before
    a write had actually finished transmitting, so a `flushInput()`
