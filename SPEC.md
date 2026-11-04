@@ -687,10 +687,12 @@ EX2 section above shows was WRONG for EX2 turned out to be accidentally
 RIGHT for EX4, now confirmed independently rather than by continued
 inheritance from that same disproven claim. **Also confirmed on real
 EX4 hardware directly** (not just the decompile): `wd-control-tool -b
-ex4 -l power red on` lit the real red power LED. EX4's own `led -h`
-text only documents `power blue on/off/blinking` (no mention of red at
-all), but the dispatch code has a full, working `power red on/off/
-blinking` branch using the identical mechanism (just the opposite
+ex4 -l power red on` lit the real red power LED, and both colors'
+`off` and `blinking` states were separately confirmed working too.
+EX4's own `led -h` text only documents `power blue on/off/blinking`
+(no mention of red at all), but the dispatch code has a full, working
+`power red on/off/blinking` branch using the identical mechanism (just
+the opposite
 bit) - `wd-control-tool` was already right to expose red for EX4 too,
 this was just never confirmed until now.
 
