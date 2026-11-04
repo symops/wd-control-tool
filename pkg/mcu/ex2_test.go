@@ -518,3 +518,39 @@ func TestEX2_SetDateAndTime_RetriesWriteWhenVerifyReadMismatches(t *testing.T) {
 		t.Fatalf("SetDateAndTime: %v", err)
 	}
 }
+
+// Found via `go tool cover`: SetDateAndTime's "no reply within
+// timeout" branch (len(reply)==0) and its final "exhausted every
+// attempt, return lastErr" branch had no test at all - every other
+// test either succeeds on the first or second attempt. Never write
+// ANY verify reply, for all ex2RTCVerifyAttempts attempts, and
+// confirm SetDateAndTime gives up with a non-nil error rather than
+// retrying forever.
+func TestEX2_SetDateAndTime_ExhaustsAttemptsOnRepeatedNoReply(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58) }()
+
+	for attempt := 0; attempt < ex2RTCVerifyAttempts; attempt++ {
+		// Only the FIRST attempt's write happens near-instantly -
+		// every later attempt's write only follows once the PREVIOUS
+		// attempt's verify-read has fully timed out internally
+		// (ex2RTCVerifyReadTimeout), so this wait must tolerate that
+		// too, not just assume every write arrives quickly.
+		fake.ReadFrame(t, 13, ex2RTCVerifyReadTimeout+time.Second) // the write
+		fake.ReadFrame(t, 7, time.Second)                          // the verify read request
+		// Deliberately never write a reply - sendBytes/recvBytes
+		// must time out on their own after ex2RTCVerifyReadTimeout.
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("SetDateAndTime after every verify attempt got no reply: want error, got nil")
+		}
+	case <-time.After(ex2RTCVerifyAttempts * (ex2RTCVerifyReadTimeout + 2*time.Second)):
+		t.Fatal("SetDateAndTime never returned")
+	}
+}
