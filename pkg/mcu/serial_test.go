@@ -262,6 +262,32 @@ func TestFlushInput_TraceEnabled_DoesNotPanicOrError(t *testing.T) {
 	}
 }
 
+// Same reasoning as TestFlushInput_TraceEnabled_DoesNotPanicOrError,
+// for recvBytes' own two internal trace calls (one for n>0, one for
+// n==0 - two different Sprintf shapes, see recvBytes' own source).
+// Writes real data so the read loop sees at least one n>0 Read, then
+// lets it go quiet so it also sees at least one n==0 Read before
+// returning - exercising both trace call sites in one pass.
+func TestRecvBytes_TraceEnabled_DoesNotPanicOrError(t *testing.T) {
+	old := mcuTrace
+	mcuTrace = true
+	defer func() { mcuTrace = old }()
+
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+
+	if _, err := fake.Master.Write([]byte{0xAA, 0xBB}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	n, err := p.recvBytes(make([]byte, 16), 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("recvBytes with tracing enabled: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("recvBytes with tracing enabled: got %d byte(s), want 2", n)
+	}
+}
+
 // Regression test for the exact real-hardware bug report this
 // project got: a real EX2 RDateAndTime reply (13 bytes) was caught
 // truncated to 8 bytes by a single Read() call that returned before
