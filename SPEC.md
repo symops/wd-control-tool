@@ -898,6 +898,8 @@ state, not the screen's. `wd-control-tool`'s own
 rather than a raw value byte specifically to avoid this ambiguity at
 every call site; the CLI's own `-s`/`--sleep on|off` maps `on` to
 `sleep=true` (screen dark) and `off` to `sleep=false` (screen lit).
+**Confirmed working on real EX4 hardware** via `wd-control-tool`
+itself (not just the vendor tool).
 
 ## Unresolved (tracked here so future work doesn't re-derive it)
 
