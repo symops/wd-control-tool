@@ -1,6 +1,7 @@
 package mcu
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -224,6 +225,29 @@ func TestPort_FlushInput_DoesNotErrorAndDrainsPendingBytes(t *testing.T) {
 // block) run without panicking or erroring when tracing is on - not
 // asserting on the actual stderr text, which is debug output, not a
 // documented contract.
+// sendBytes' "tcdrain failed" branch (the TCSBRK ioctl itself
+// erroring, as opposed to the Write loop above it) had no coverage -
+// found via `go tool cover`. TCSBRK only means anything on an actual
+// terminal device, so a plain regular file - which happily accepts
+// Write - fails it with ENOTTY, a clean, deterministic way to hit
+// this branch without needing a real tty. The real point of this
+// test: sendBytes must still return nil (the tcdrain failure is only
+// ever traced, never propagated as a user-visible error - see its
+// own "DIAGNOSTIC" doc comment), not that the ioctl itself fails
+// (that's just the mechanism, not the property being verified).
+func TestSendBytes_TCDrainFailureIsNotPropagatedAsAnError(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "sendbytes-tcdrain-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer f.Close()
+
+	p := OpenFile(f)
+	if err := p.sendBytes([]byte{0xFA, 0x00, 0xFB}, nil); err != nil {
+		t.Fatalf("sendBytes against a regular file (tcdrain must fail, ENOTTY): want nil, got %v", err)
+	}
+}
+
 func TestFlushInput_TraceEnabled_DoesNotPanicOrError(t *testing.T) {
 	old := mcuTrace
 	mcuTrace = true
