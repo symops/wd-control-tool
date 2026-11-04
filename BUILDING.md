@@ -737,6 +737,41 @@ fields, not from the wire's own dow byte - only the RAW BYTE SENT TO
 THE MCU was wrong, silently, until a read-back capture could finally
 check it.
 
+A thirteenth finding: EX4's HD-bay LEDs (`hd0`..`hd3`) turned out to
+use a DIFFERENT mechanism from EX2's, not an identical one just moved
+to a different board - a real-hardware report showed EX2's confirmed
+hd-bay registers had no effect on EX4 at all, and a second report
+found EX4's blue hd-bay LEDs toggle all four bays together while red
+toggles each bay independently, something EX2's uniform per-bay-bit
+model structurally cannot produce either way. A live strace (per
+zone/color/state, 16 captures total) found two different `/dev/mem`
+pages, one per color (`0xf1010000` for red - the same page as EX4's
+power LED, just different registers within it; `0xe0010000` for blue,
+identical across every bay), and decompiling the real `led` binary
+confirmed exactly why: its blue handler (`FUN_0000ab20`) reads the
+bay-index argument, validates it's 0..3, and then never uses it again
+- it always writes the same literal value to the same single register
+regardless of which bay was asked for. Implemented as
+`pkg/led.EX4HDBayPlan`, dispatched separately from the EX2-only
+`Plan`/`hdBayBits` path - see SPEC.md's "HD-bay".
+
+A process-level lesson from the SAME investigation: the first attempt
+at this strace capture put `strace` INSIDE the command string passed
+to `ex2.sh` (i.e. `ex2.sh "strace ... led ..."`), which runs inside the
+vendor's own `/tools` chroot - busybox only, no `strace` binary there
+at all. Every one of those 16 "captures" silently logged `sh: strace:
+not found` with a perfectly successful (0) exit status (from
+`ex2.sh`'s own wrapper, which doesn't propagate the inner command's
+failure), so nothing about the run looked wrong until a log file's
+actual contents were checked instead of trusting the exit code. The
+fix: wrap `ex2.sh` itself with `strace -f` from the HOST shell, not
+inside the string handed to it - `-f` follows the fork/exec straight
+through `ex2.sh`'s own `chroot()` call into `led`, which is how every
+earlier successful capture in this project (fan RPM, RTC, power LED)
+had always done it; this was the first time the mistake was actually
+made, and only visible once a log's text was read rather than its exit
+status.
+
 A smaller, process-level lesson from the same work: `make strip`'s
 real armv7/armv5 cross-compile caught a build failure (`EX4FanTachAddr`,
 `0xf1010150`, overflowing a plain 32-bit `int`) that `go vet`/`go test`

@@ -1599,13 +1599,14 @@ func TestRun_LEDZoneValidationPerBoard(t *testing.T) {
 	if code != exitOK || !strings.Contains(out, "would fail") || !strings.Contains(out, "only has hd0/hd1") {
 		t.Errorf("ex2 hd2: code=%d out=%q", code, out)
 	}
-	// hd2 physically exists on EX4, but (unlike hd0/hd1) has no
-	// confirmed register bit at all - see pkg/led's hdBayBits. Also
-	// "would fail", for a different reason (unconfirmed, not
-	// board-unsupported).
+	// hd2 physically exists on EX4 and (unlike the old EX2-only guess)
+	// now has a confirmed register bit too - decompiling the real EX4
+	// `led` binary found hd0..hd3 all go through the same uniform
+	// per-bay-bit mechanism for red (see pkg/led.EX4HDBayPlan). This
+	// must now succeed, not fail.
 	code, out, _ = captureRun(t, []string{"-b", "ex4", "-n", "-l", "hd2", "red", "on"})
-	if code != exitOK || !strings.Contains(out, "would fail") || !strings.Contains(out, "no confirmed register bit") {
-		t.Errorf("ex4 hd2: code=%d out=%q", code, out)
+	if code != exitOK || strings.Contains(out, "would fail") {
+		t.Errorf("ex4 hd2: code=%d out=%q, want success (hd2/hd3 are now confirmed on EX4)", code, out)
 	}
 }
 
@@ -1616,11 +1617,16 @@ func TestRun_LEDZoneValidationPerBoard(t *testing.T) {
 //
 // Which combinations actually succeed under dry-run, on EX4:
 //   - power: every color/state (unchanged, long-confirmed).
-//   - hd0/hd1: on/off succeed (confirmed via a real register-page
-//     capture - see pkg/led's hdBayBits); blinking fails (no real
-//     capture has ever shown what blinking does on HD-bay).
-//   - hd2/hd3: always fail - no confirmed register bit at all (EX2
-//     only has hd0/hd1; no EX4 hardware has been available either).
+//   - hd0/hd1/hd2/hd3 red: on/off/blinking all succeed - decompiling
+//     the real EX4 `led` binary found a uniform per-bay-bit mechanism
+//     covering all four bays, including blinking (see
+//     pkg/led.EX4HDBayPlan).
+//   - hd0/hd1/hd2/hd3 blue: on/off succeed (one register shared by
+//     all four bays - confirmed by decompilation and by a live
+//     hardware report that all four bays' blue LEDs toggle together);
+//     blinking fails - the vendor's own blue handler has no blinking
+//     branch at all, confirmed by decompilation, not just
+//     unconfirmed.
 func TestRun_LEDAllZonesColorsStates(t *testing.T) {
 	for _, zone := range []string{"power", "hd0", "hd1", "hd2", "hd3"} {
 		for _, color := range []string{"red", "blue"} {
@@ -1630,8 +1636,8 @@ func TestRun_LEDAllZonesColorsStates(t *testing.T) {
 					t.Errorf("%s/%s/%s: code=%d out=%q err=%q", zone, color, state, code, out, errOut)
 					continue
 				}
-				wantFail := zone == "hd2" || zone == "hd3" ||
-					((zone == "hd0" || zone == "hd1") && (state == "blinking" || state == "blink"))
+				isHDBay := zone == "hd0" || zone == "hd1" || zone == "hd2" || zone == "hd3"
+				wantFail := isHDBay && color == "blue" && (state == "blinking" || state == "blink")
 				gotFail := strings.Contains(out, "would fail")
 				if gotFail != wantFail {
 					t.Errorf("%s/%s/%s: out=%q, want fail=%v", zone, color, state, out, wantFail)

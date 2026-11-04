@@ -22,3 +22,13 @@ func errHDBayZoneUnconfirmed(z Zone) error {
 func errHDBayBlinkingUnconfirmed(z Zone, c Color) error {
 	return fmt.Errorf("led: HD-bay blinking has no confirmed register behavior (zone=%v color=%v)", z, c)
 }
+
+// errHDBayBlueBlinkingNotImplementedEX4: unlike errHDBayBlinkingUnconfirmed
+// above (no real capture exists either way), this one IS confirmed -
+// decompiling the real EX4 `led` binary's blue hd-bay handler
+// (FUN_0000ab20) found no "blinking" branch at all; it's a genuine
+// no-op in the vendor's own code, not a gap in this tool. See
+// EX4HDBayPlan and SPEC.md's "HD-bay".
+func errHDBayBlueBlinkingNotImplementedEX4() error {
+	return fmt.Errorf("led: EX4's own vendor code has no HD-bay blue blinking at all (confirmed by decompilation, not just unconfirmed)")
+}

@@ -635,8 +635,17 @@ func buildLEDAction(b board.Board, serialPath string, args []string) (*action, i
 		err = serr
 	}
 
+	// EX4's HD-bay LEDs (hd0..hd3) are NOT the same mechanism as
+	// EX2's - a real-hardware report showed EX2's confirmed hd-bay
+	// registers have no effect on EX4, and a second report (plus a
+	// decompile of the real EX4 `led` binary) found EX4's blue
+	// hd-bay LEDs are driven by one register shared across all four
+	// bays, while red is per-bay but in a different register pair
+	// from EX2's. See pkg/led.EX4HDBayPlan and SPEC.md's "HD-bay".
 	var ws []regio.Write
-	if err == nil {
+	if err == nil && b == board.EX4 && zone != led.Power {
+		ws, err = led.EX4HDBayPlan(zone, color, stateVal)
+	} else if err == nil {
 		ws, err = led.Plan(zone, color, stateVal)
 	}
 

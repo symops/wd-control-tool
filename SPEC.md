@@ -501,6 +501,76 @@ table is xmldb/disk/RAID/volume bookkeeping. The one call `led` makes
 into it (`dbSetSocket`) is pure software state-tracking, unrelated to
 the physical write.
 
+#### EX4's HD-bay mechanism is DIFFERENT from EX2's - confirmed by live capture + decompilation
+
+A real-hardware report showed `wd-control-tool -b ex4 -l hd0/hd1 red
+on` had no physical effect at all, despite running the exact same
+writes (`hdBayReg1`/`hdBayReg2` = `0xF1018140`/`0xF1018150`) that are
+confirmed on real EX2 hardware above. A second report found something
+the EX2 model structurally cannot explain either way: EX4's blue
+hd-bay LEDs toggle **all four bays together**, while red toggles each
+bay **independently**.
+
+A live strace of the real EX4 `led hdN red/blue on/off` (`-e
+trace=openat,mmap,mmap2,pread64,pwrite64,write,close`) found two
+entirely different `/dev/mem` pages, one per color, confirmed across
+all 16 zone/color/state combinations (hd0..hd3 x red/blue x on/off):
+
+| Color | `/dev/mem` page mapped |
+|---|---|
+| red | `0xf1010000` - the SAME page EX4's power LED uses (see "Power LED" below), just different registers within it |
+| blue | `0xe0010000` - an entirely different physical page, shared identically across every bay |
+
+Decompiling the real `led` binary (the same file already confirmed
+for EX4's power LED) confirmed exactly why, via the dispatcher
+`FUN_0000acb8(bay_index, color, state)` both colors share:
+
+```c
+// red (FUN_00009c9c, hd0 shown - hd1/hd2/hd3 use bits 14/15/16):
+// "on":       reg1 |= 0x2000;  reg2 &= ~0x2000;
+// "off":      reg1 &= ~0x2000; reg2 &= ~0x2000;
+// "blinking": /* reg1 untouched */ reg2 |= 0x2000;
+// reg1 = 0xf1010140, reg2 = 0xf1010148 - bits 13/14/15/16 for
+// hd0/hd1/hd2/hd3, confirmed directly from the decompiled constants
+// (not the old, EX2-disproven "13+N" guess - this happens to match
+// that shape, but is independently confirmed, not assumed).
+
+// blue (FUN_0000ab20) - the bay-index argument is read and validated
+// (0..3) but then NEVER USED to compute anything:
+// "on":  LIB_Write_Mem(0xe00104f0, 0x7c);   // same for ANY bay
+// "off": LIB_Write_Mem(0xe00104f0, 0xf44);  // same for ANY bay
+// "blinking": no branch at all - a confirmed no-op in the vendor's
+// own code, not a gap in this tool.
+```
+
+This fully explains the real-hardware report: EX4's blue hd-bay LEDs
+share ONE register across all four bays by design in the vendor's own
+code, not a bug anywhere in the chain - there is no per-bay blue
+control to replicate. Red, in contrast, genuinely is per-bay, just in
+a different register pair from EX2's.
+
+`wd-control-tool` replicates this exactly (`pkg/led.EX4HDBayPlan`,
+dispatched from `cmd/wd-control-tool/main.go`'s `buildLEDAction` for
+`board.EX4` HD-bay zones instead of the EX2-only `Plan`/`hdBayBits`
+path): red is per-bay (`on`/`off`/`blinking` all confirmed and
+implemented, including the asymmetric "blinking only touches reg2"
+detail above); blue `on`/`off` write the single shared register
+regardless of which zone was requested (matching the vendor's own
+behavior byte-for-byte, surprising as it is); blue `blinking` reports
+an error (`errHDBayBlueBlinkingNotImplementedEX4`) rather than
+silently doing nothing, since the vendor's own code has no such branch
+either.
+
+One capture's own strace log (`hd0_blue_on.log`) initially showed `sh:
+strace: not found` with exit status 0 for every single command - not
+a hardware problem at all: the vendor's own `/tools` chroot (which
+`ex2.sh` execs `led` into) only has busybox, no `strace` binary.
+`strace` has to wrap `ex2.sh` itself from the host side (`-f` follows
+the fork/exec straight through `ex2.sh`'s own `chroot()` into `led`) -
+every other EX4 capture in this document already did this correctly;
+this was just the first time the mistake was made explicit by actually
+checking a log file's contents instead of trusting a zero exit status.
+
 ### Power LED - MCU (`NewPWRLed`), confirmed on real EX2 hardware - NOT `/dev/mem`
 
 **Corrected** after a real-hardware failure report: this spec
@@ -825,6 +895,17 @@ display at all.
    `rtc -s` at boot) no longer has a known failure mode to defend
    against, now that the actual cause is understood and fixed at the
    source rather than papered over.
+8. ~~EX4's HD-bay LED mechanism (assumed identical to EX2's)~~ -
+   **resolved**: it isn't - a real-hardware failure report plus a
+   live strace plus decompiling the real `led` binary found EX4 uses
+   a completely different register pair for red (per-bay, like EX2,
+   but at `0xf1010140`/`0xf1010148` instead of
+   `0xF1018140`/`0xF1018150`) and a single register SHARED by all
+   four bays for blue (`0xe00104f0` - the vendor's own code reads the
+   bay-index argument but never uses it) - see "HD-bay", "EX4's
+   HD-bay mechanism is DIFFERENT from EX2's" above. hd2/hd3 are now
+   confirmed on EX4 too (they were never confirmed for EX2, which
+   doesn't physically have them).
 
 ## Author
 
