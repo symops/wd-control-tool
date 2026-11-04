@@ -107,6 +107,24 @@ func TestEX4FanLevelFrame_RejectsOutOfRange(t *testing.T) {
 	}
 }
 
+// TestEX4LCDSleepFrame pins down the exact bytes a live strace of the
+// real `up_send_ctl LCDSleepMode 0`/`LCDSleepMode 1` captured on real
+// EX4 hardware - see ex4LCDSleepMode's doc comment.
+func TestEX4LCDSleepFrame(t *testing.T) {
+	cases := []struct {
+		sleep bool
+		want  []byte
+	}{
+		{sleep: true, want: []byte{0xFA, 0x04, 0x82, 0x01, 0x00, 0x00, 0xFB}},
+		{sleep: false, want: []byte{0xFA, 0x04, 0x82, 0x00, 0x00, 0x00, 0xFB}},
+	}
+	for _, c := range cases {
+		if got := EX4LCDSleepFrame(c.sleep); !bytes.Equal(got, c.want) {
+			t.Errorf("EX4LCDSleepFrame(%v) = % X, want % X", c.sleep, got, c.want)
+		}
+	}
+}
+
 func TestEX4DateTimeFrame(t *testing.T) {
 	got, err := EX4DateTimeFrame(2026, 10, 31, 6, 14, 5, 30)
 	if err != nil {

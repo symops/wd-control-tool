@@ -861,6 +861,44 @@ vendor tool directly, not by reasoning about it.
 `SysName` (see "EX2/EX4 protocol", group 9). EX2 and EX2U have no
 display at all.
 
+### LCD sleep mode - `LCDSleepMode`, confirmed on real EX4 hardware
+
+Found while auditing the full 82-row EX4 command table for anything
+display-related beyond `SysName`: `LCDSleepMode` (b4=`0x04`,
+b5=`0x82`, dispatch group 27, row 52 - previously undocumented, like
+every other group this spec doesn't describe in "Frame shapes").
+Rather than decompile `up_send_ctl`'s group-27 builder, this was
+confirmed the simpler way: `up_send_ctl` already knows how to send
+this command correctly, so a live strace of the real,
+working `up_send_ctl LCDSleepMode 0`/`LCDSleepMode 1` on real EX4
+hardware captured the exact wire bytes directly, no decompilation
+needed:
+
+| Command | Frame |
+|---|---|
+| `LCDSleepMode 0` | `FA 04 82 00 00 00 FB` |
+| `LCDSleepMode 1` | `FA 04 82 01 00 00 FB` |
+
+This is the exact same "replace the table's B6 slot with a runtime
+value" shape `FanControl` (group 24) already uses (`buildValueFrame`)
+- group 27 is a different dispatch group number, but not a new frame
+shape.
+
+**The value's meaning was confirmed on real hardware, not assumed
+from the vendor's own `up_send_ctl LCDSleepMode` (no args) usage
+text** (`0: OFF, 1: ON`) - that text alone is ambiguous about WHAT is
+off/on (the sleep *feature*, or the screen itself), and a first,
+hasty real-hardware report of the opposite mapping turned out to be a
+mis-report, corrected on a careful one-command-at-a-time retest:
+value `1` makes the physical screen go dark (sleep mode ON), value
+`0` lights it back up (sleep mode OFF) - matching the vendor's own
+"0: OFF, 1: ON" wording read as describing the sleep feature's own
+state, not the screen's. `wd-control-tool`'s own
+`mcu.EX4LCDSleepFrame`/`LCDSleep` take an explicit `sleep bool`
+rather than a raw value byte specifically to avoid this ambiguity at
+every call site; the CLI's own `-s`/`--sleep on|off` maps `on` to
+`sleep=true` (screen dark) and `off` to `sleep=false` (screen lit).
+
 ## Unresolved (tracked here so future work doesn't re-derive it)
 
 1. **The MCU-to-host reply frame format** is mostly still undecoded,

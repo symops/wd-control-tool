@@ -783,6 +783,25 @@ above `0x7fffffff` needs an explicit `int64` type at its own
 declaration, not just at its use site, or this surfaces again as a
 cross-compile-only failure.
 
+A fourteenth finding: adding EX4's LCD sleep mode (`-s`/`--sleep`)
+needed no decompilation at all, unlike almost everything else in this
+project - `LCDSleepMode` is an ordinary row in the already-extracted
+82-row command table (`up_send_ctl`'s own `.data` section dump, see
+SPEC.md), so the real `up_send_ctl LCDSleepMode 0`/`LCDSleepMode 1`
+already knows how to build and send it correctly; a live strace of
+those two real, working invocations captured the exact wire bytes
+directly. The one real pitfall was semantic, not a protocol-decoding
+one: the vendor's own usage text (`0: OFF, 1: ON`) is genuinely
+ambiguous about WHAT is off/on, and a first real-hardware report of
+value 1 -> screen lit / value 0 -> screen dark turned out to be
+backwards on a careful retest (value 1 actually puts the screen to
+sleep). Lesson: for a binary on/off value whose own semantics aren't
+pinned down by a worked example, ask for one command's effect at a
+time, not the pair taken together - the ambiguity disappears
+immediately in a single clean observation, but can silently flip
+between a quick, memory-driven recollection of "which one did I just
+run" after both were tried close together.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

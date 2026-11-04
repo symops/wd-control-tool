@@ -32,6 +32,21 @@ var (
 	ex4DeviceReady    = legacyCmd{"DeviceReady", 0x03, 0x01, 0x00, 0x00, 0x00}
 	ex4DeviceShutdown = legacyCmd{"DeviceShutdown", 0x03, 0x03, 0x01, 0x01, 0x00}
 	ex4MCUReset       = legacyCmd{"MCUReset", 0x03, 0x03, 0x02, 0x01, 0x00}
+
+	// ex4LCDSleepMode: confirmed via a live strace of the real
+	// `up_send_ctl LCDSleepMode 0`/`LCDSleepMode 1` on real EX4
+	// hardware (FA 04 82 00 00 00 FB / FA 04 82 01 00 00 FB) - the
+	// same "replace B6 with a runtime value" shape as FanControl
+	// above (buildValueFrame), not a new frame shape. The vendor's
+	// own `up_send_ctl LCDSleepMode` (no args) prints its own usage:
+	// "0: OFF, 1: ON" - confirmed on real hardware to mean the LCD's
+	// own sleep state, not raw on/off wording about the value itself:
+	// value 1 goes dark (sleep ON), value 0 lights it back up (sleep
+	// OFF) - the opposite of a naive "1 looks more like 'on' so it
+	// must mean the screen is on" reading, so EX4LCDSleepFrame takes
+	// an explicit `sleep` bool rather than a raw value to make this
+	// unambiguous at the call site.
+	ex4LCDSleepMode = legacyCmd{"LCDSleepMode", 0x04, 0x82, 0x00, 0x00, 0x00}
 )
 
 // EX4 is a legacy-protocol client bound to EX4's command table.
@@ -49,6 +64,25 @@ func EX4FanLevelFrame(level int) ([]byte, error) {
 		return nil, errUnsupportedFanLevel(level)
 	}
 	return buildValueFrame(ex4FanControl, byte(level)), nil
+}
+
+// EX4LCDSleepFrame builds the frame for LCDSleep's sleep argument,
+// without sending it - see ex4LCDSleepMode's doc comment for the
+// confirmed value convention (sleep=true -> value 1 -> screen goes
+// dark; sleep=false -> value 0 -> screen lights back up).
+func EX4LCDSleepFrame(sleep bool) []byte {
+	var value byte
+	if sleep {
+		value = 1
+	}
+	return buildValueFrame(ex4LCDSleepMode, value)
+}
+
+// LCDSleep puts the front-panel LCD to sleep (dark) or wakes it back
+// up - hardware-confirmed on real EX4 hardware, see
+// ex4LCDSleepMode's doc comment.
+func (m *EX4) LCDSleep(sleep bool) error {
+	return sendLegacy(m.p, EX4LCDSleepFrame(sleep))
 }
 
 // FanLevel sets the fan via the MCU - EX4 has no direct-register fan

@@ -66,6 +66,8 @@ func modeNameFor(flag string) string {
 		return "display"
 	case "-t", "--temp":
 		return "temp"
+	case "-s", "--sleep":
+		return "sleep"
 	default:
 		return ""
 	}
@@ -80,7 +82,7 @@ func modeNameFor(flag string) string {
 // prints the decoded temperature (see buildTempAction).
 func arityFor(mode string, b board.Board) int {
 	switch mode {
-	case "fan", "display", "rtc":
+	case "fan", "display", "rtc", "sleep":
 		return 1
 	case "led":
 		if b == board.EX2U {
@@ -210,7 +212,7 @@ func parseArgs(args []string) (*options, error) {
 			if err := setBoard("--board", strings.TrimPrefix(a, "--board=")); err != nil {
 				return nil, err
 			}
-		case a == "-f" || a == "--fan" || a == "-d" || a == "--display" || a == "-r" || a == "--rtc" || a == "--serial":
+		case a == "-f" || a == "--fan" || a == "-d" || a == "--display" || a == "-r" || a == "--rtc" || a == "-s" || a == "--sleep" || a == "--serial":
 			i++ // skip this flag's own single argument, whatever it looks like
 		case a == "-l" || a == "--led":
 			b := opts.boardValue
@@ -305,7 +307,7 @@ func run(args []string) int {
 	b := opts.boardValue
 
 	if len(opts.actions) == 0 {
-		fmt.Fprintln(os.Stderr, "wd-control-tool: at least one of -l/--led, -f/--fan, -r/--rtc, -d/--display, -t/--temp is required")
+		fmt.Fprintln(os.Stderr, "wd-control-tool: at least one of -l/--led, -f/--fan, -r/--rtc, -d/--display, -t/--temp, -s/--sleep is required")
 		printUsage(os.Stderr)
 		return exitUsage
 	}
@@ -344,16 +346,21 @@ chained in one command, run in the order given:
   -f, --fan LEVEL     board-native units, NOT 0-100 - see README.md - ex2u, ex2, ex4
   -f, --fan rpm       read back the current fan RPM instead of setting a level - ex2 only
   -r, --rtc w|r|s      w: push the host's current time to the MCU RTC - ex2, ex4
-                    r: read the MCU RTC and print it - ex2 only (ex4: unconfirmed)
-                    s: like r, and also set the host's system clock from it - ex2 only (ex4: unconfirmed)
-  -d, --display TEXT   write text to the front-panel LCD, taken verbatim - ex4 only
+                    r: read the MCU RTC and print it - ex2, ex4
+                    s: like r, and also set the host's system clock from it - ex2, ex4
+  -d, --display TEXT   write text to the front-panel LCD, taken verbatim (Cyrillic is
+                    auto-transliterated to Latin - the LCD's font ROM has none) - ex4 only
   -t, --temp           request and print the temperature as "Temperature: N C" (hardware-confirmed - see SPEC.md) - ex2u only, no arguments
+  -s, --sleep on|off   put the front-panel LCD to sleep (dark) / wake it back up - ex4 only
 
 led's own arguments:
-  ex2, ex4:  ZONE COLOR STATE   zones: power,hd0,hd1[,hd2,hd3]; colors: red,blue; states: on,off,blinking(blink)
+  ex2:       ZONE COLOR STATE   zones: power,hd0,hd1; colors: red,blue; states: on,off,blinking(blink)
                     blinking is confirmed only for the power zone - hd-bay blinking
-                    has no confirmed register behavior and reports an error; hd2/hd3
-                    (EX4 only) are unconfirmed in every state, same reason
+                    has no confirmed register behavior and reports an error
+  ex4:       ZONE COLOR STATE   zones: power,hd0,hd1,hd2,hd3; colors: red,blue; states: on,off,blinking(blink)
+                    blue blinking on hd0..hd3 has no vendor implementation at all
+                    (confirmed by decompilation) and reports an error; every other
+                    zone/color/state combination is hardware-confirmed - see SPEC.md
   ex2u:      STATE              states: on,off,blinking(blink),breathing(breathe)
 
 Modifiers (may appear anywhere, apply to every action in the command):
@@ -365,6 +372,7 @@ Examples:
   wd-control-tool -b ex2 -f 3
   wd-control-tool -b ex4 --display "Booting..."
   wd-control-tool -b ex2 --led power blue on -f 1
+  wd-control-tool -b ex4 --sleep on
 
 Exit codes: 0 ok, 1 usage/argument error, 2 not supported on this board, 3 hardware I/O error.
 
@@ -442,9 +450,48 @@ func buildAction(b board.Board, mode, serialPath string, args []string, debug bo
 		return buildRTCAction(b, serialPath, args, debug)
 	case "temp":
 		return buildTempAction(b, serialPath, args, debug)
+	case "sleep":
+		return buildSleepAction(b, serialPath, args)
 	default:
 		panic("unreachable mode " + mode)
 	}
+}
+
+// buildSleepAction wraps EX4's LCDSleepMode - hardware-confirmed to
+// put the front-panel LCD to sleep (dark)/wake it back up, see
+// mcu.EX4LCDSleepFrame's doc comment for the value convention.
+func buildSleepAction(b board.Board, serialPath string, args []string) (*action, int) {
+	if b != board.EX4 {
+		return unsupportedErr("sleep is not supported on board %v", b)
+	}
+	var sleep bool
+	var err error
+	switch args[0] {
+	case "on":
+		sleep = true
+	case "off":
+		sleep = false
+	default:
+		err = fmt.Errorf("sleep state must be \"on\" or \"off\", got %q", args[0])
+	}
+
+	// mcu.EX4LCDSleepFrame itself never errors (sleep is a plain bool)
+	// - frameDebugLines already ignores frame entirely when err != nil,
+	// so computing it unconditionally here is safe either way.
+	frame := mcu.EX4LCDSleepFrame(sleep)
+	return &action{
+		describe:   fmt.Sprintf("send lcd sleep %s to EX4 MCU (%s)", args[0], serialPath),
+		debugLines: frameDebugLines(err, frame, serialPath, 19200),
+		planErr:    err,
+		apply: func() error {
+			p, operr := mcu.Open(serialPath, 19200)
+			if operr != nil {
+				return operr
+			}
+			defer p.Close()
+			return mcu.NewEX4(p).LCDSleep(sleep)
+		},
+	}, exitOK
 }
 
 func unsupportedErr(format string, a ...any) (*action, int) {

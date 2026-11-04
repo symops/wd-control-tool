@@ -48,6 +48,7 @@ wd-control-tool -b ex2 --led power blue on
 wd-control-tool -b ex4 -f 2                            # EX4: Medium
 wd-control-tool -b ex4 --led power blue on
 wd-control-tool -b ex4 --display "Booting..."
+wd-control-tool -b ex4 --sleep on                      # EX4: put the LCD to sleep (dark)
 wd-control-tool -b ex4 -r w                            # push the host's current time to the MCU RTC
 wd-control-tool -b ex2 -r r                            # read the MCU RTC and print it
 wd-control-tool -b ex2 -r s                            # read the MCU RTC and set the host's system clock from it
@@ -62,8 +63,9 @@ wd-control-tool -b ex4 -n -D --led power blue on       # preview the exact bytes
   usage error, not a way to switch boards partway through one
   command).
 - Each action is one of `-l/--led`, `-f/--fan`, `-r/--rtc`,
-  `-d/--display`, `-t/--temp`, followed directly by its own fixed
-  number of arguments (no delimiter needed - see the table below).
+  `-d/--display`, `-t/--temp`, `-s/--sleep`, followed directly by its
+  own fixed number of arguments (no delimiter needed - see the table
+  below).
   Several actions can be chained in one command and run in the order
   given; the same action may repeat.
 - `-n`, `--dry-run` - print what would be done, touch no hardware.
@@ -97,6 +99,7 @@ fails stops the rest - later actions in the same command never run.
 | `-r`, `--rtc` | ex2, ex4 | `r` | Reads the MCU RTC and prints it in UTC, unconverted - matching the vendor `rtc -r`'s own wording exactly (`rtc: RTC time = YYYY/M/D Mon HH:MM:SS`) - hardware-confirmed on both boards. The printed weekday always comes from the date itself (year/month/day), never the wire's own dow byte - see SPEC.md's "RTC" for why that matters specifically on EX4 (its vendor tool prints the wrong weekday for a correctly-written date; this tool doesn't inherit that). |
 | `-r`, `--rtc` | ex2, ex4 | `s` | Like `r`, and also sets the host's own system clock from the result (correctly, as an absolute UTC moment - the host's own local timezone is applied automatically, same as any other system-clock write) - hardware-confirmed for the read on both boards; the system-clock-set side effect is not exercised by this project's own automated tests (see BUILDING.md). |
 | `-t`, `--temp` | ex2u | (none) | Sends the `tmp_get` request and prints `Temperature: N C` (hardware-confirmed from one live capture - see SPEC.md's "EX2U protocol"). Prints "no reply" rather than failing if nothing arrives within 2s. Use `-D` to see the raw reply bytes (`debug: reply=...`), same as any other command's `-D` output. |
+| `-s`, `--sleep` | ex4 | `on`/`off` | Puts the front-panel LCD to sleep (dark) or wakes it back up - hardware-confirmed (a live capture of the vendor's own `up_send_ctl LCDSleepMode 0/1`, see SPEC.md's "LCD sleep mode"). `on` = sleep (dark), `off` = awake (lit) - matches the vendor's own "0: OFF, 1: ON" wording about the sleep feature itself, not the screen. |
 
 No generic "all boards" fallback exists anywhere: every command's
 actual mechanism differs per board (see SPEC.md), and this tool

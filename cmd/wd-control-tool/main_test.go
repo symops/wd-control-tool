@@ -464,6 +464,41 @@ func TestRun_DryRun_EX4Led(t *testing.T) {
 	}
 }
 
+func TestRun_DryRun_EX4Sleep(t *testing.T) {
+	cases := []struct {
+		state string
+		want  string
+	}{
+		{"on", "FA 04 82 01 00 00 FB"},
+		{"off", "FA 04 82 00 00 00 FB"},
+	}
+	for _, c := range cases {
+		code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-s", c.state})
+		if code != exitOK {
+			t.Fatalf("state=%q: code=%d out=%q", c.state, code, out)
+		}
+		if !strings.Contains(out, c.want) {
+			t.Errorf("state=%q: out=%q, want frame %q", c.state, out, c.want)
+		}
+	}
+}
+
+func TestRun_Sleep_InvalidState(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-s", "maybe"})
+	if code != exitOK || !strings.Contains(out, "would fail") {
+		t.Errorf("code=%d out=%q, want a dry-run \"would fail\"", code, out)
+	}
+}
+
+func TestRun_Sleep_UnsupportedOnOtherBoards(t *testing.T) {
+	for _, b := range []string{"ex2u", "ex2"} {
+		code, _, errOut := captureRun(t, []string{"-b", b, "-s", "on"})
+		if code != exitUnsupported {
+			t.Errorf("board=%q: code=%d err=%q, want exitUnsupported", b, code, errOut)
+		}
+	}
+}
+
 func TestRun_DryRun_EX4Display(t *testing.T) {
 	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-d", "Booting..."})
 	if code != exitOK {

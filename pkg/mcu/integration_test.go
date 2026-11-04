@@ -123,6 +123,24 @@ func TestEX4_FanLevel_PropagatesValidationError(t *testing.T) {
 	}
 }
 
+func TestEX4_LCDSleep_OverPTY(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX4(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.LCDSleep(true) }()
+
+	got := fake.ReadFrame(t, 7, time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("LCDSleep(true): %v", err)
+	}
+
+	want := []byte{0xFA, 0x04, 0x82, 0x01, 0x00, 0x00, 0xFB}
+	if !bytes.Equal(got, want) {
+		t.Errorf("wire bytes = % X, want % X", got, want)
+	}
+}
+
 func TestEX4_Display_OverPTY(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX4(OpenFile(fake.Slave))
