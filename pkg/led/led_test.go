@@ -355,6 +355,11 @@ func FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
 // actually see it. HD0 and HD1's red bits are distinct (see
 // hdBayBits), so N goroutines each setting ONE distinct bay on via
 // Set concurrently must all survive, with no lost update.
+// rounds=50: like pkg/regio's own TestMem_SetClearBits_
+// ConcurrentDistinctBitsAllSurvive, a single pass only proves the fix
+// held once - each round re-zeroes both HD-bay registers and re-fires
+// all 4 goroutines fresh, giving a regression 50 independent chances
+// to surface instead of one.
 func TestSet_ConcurrentDistinctHDBaysAllSurvive(t *testing.T) {
 	mem := fakeregio.New(t)
 	cases := []struct {
@@ -363,22 +368,32 @@ func TestSet_ConcurrentDistinctHDBaysAllSurvive(t *testing.T) {
 	}{
 		{HD0, Red}, {HD0, Blue}, {HD1, Red}, {HD1, Blue},
 	}
+	const rounds = 50
 
-	var wg sync.WaitGroup
-	wg.Add(len(cases))
-	for _, c := range cases {
-		go func(zone Zone, color Color) {
-			defer wg.Done()
-			if err := Set(mem, zone, color, On); err != nil {
-				t.Errorf("Set(%v, %v, On): %v", zone, color, err)
-			}
-		}(c.zone, c.color)
-	}
-	wg.Wait()
+	for round := 0; round < rounds; round++ {
+		if err := mem.WriteReg32(hdBayReg1, 0); err != nil {
+			t.Fatalf("round %d: reset hdBayReg1: %v", round, err)
+		}
+		if err := mem.WriteReg32(hdBayReg2, 0); err != nil {
+			t.Fatalf("round %d: reset hdBayReg2: %v", round, err)
+		}
 
-	want := uint32(1<<21 | 1<<25 | 1<<20 | 1<<23) // HD0 red+blue, HD1 red+blue
-	got := mustRead(t, mem, hdBayReg1)
-	if got != want {
-		t.Errorf("after 4 concurrent Set calls: hdBayReg1 = 0x%x, want 0x%x (missing bits: 0x%x)", got, want, want&^got)
+		var wg sync.WaitGroup
+		wg.Add(len(cases))
+		for _, c := range cases {
+			go func(zone Zone, color Color) {
+				defer wg.Done()
+				if err := Set(mem, zone, color, On); err != nil {
+					t.Errorf("round %d: Set(%v, %v, On): %v", round, zone, color, err)
+				}
+			}(c.zone, c.color)
+		}
+		wg.Wait()
+
+		want := uint32(1<<21 | 1<<25 | 1<<20 | 1<<23) // HD0 red+blue, HD1 red+blue
+		got := mustRead(t, mem, hdBayReg1)
+		if got != want {
+			t.Fatalf("round %d: after 4 concurrent Set calls: hdBayReg1 = 0x%x, want 0x%x (missing bits: 0x%x)", round, got, want, want&^got)
+		}
 	}
 }

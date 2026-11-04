@@ -213,29 +213,44 @@ func TestMem_ConcurrentAccessIsRaceFree(t *testing.T) {
 // artificial delay - real syscall overhead in mapRegister's
 // mmap/munmap is enough to open the window on a multi-core machine -
 // and confirm every single bit survives.
+// rounds=100, not a single pass: the lost-update window this test
+// catches is a timing race, not a deterministic bug - the original
+// single-pass version of this test already caught it reliably once
+// (see SetClearBits' own doc comment), but a single pass gives no
+// assurance the fix holds across repeated runs on a machine with
+// different scheduling noise. Each round re-zeroes the register and
+// re-fires all n goroutines fresh, so a regression has 100 independent
+// chances to show up instead of one.
 func TestMem_SetClearBits_ConcurrentDistinctBitsAllSurvive(t *testing.T) {
 	mem := newFakeMem(t, 1<<20)
 	const addr = 0x5000
 	const n = 32
+	const rounds = 100
 
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for bit := 0; bit < n; bit++ {
-		go func(bit uint32) {
-			defer wg.Done()
-			if err := mem.SetClearBits(addr, 1<<bit, 0); err != nil {
-				t.Errorf("SetClearBits(bit %d): %v", bit, err)
-			}
-		}(uint32(bit))
-	}
-	wg.Wait()
+	for round := 0; round < rounds; round++ {
+		if err := mem.WriteReg32(addr, 0); err != nil {
+			t.Fatalf("round %d: reset WriteReg32: %v", round, err)
+		}
 
-	got, err := mem.ReadReg32(addr)
-	if err != nil {
-		t.Fatalf("ReadReg32: %v", err)
-	}
-	if got != 0xFFFFFFFF {
-		t.Errorf("after %d goroutines each setting one distinct bit: got 0x%08x, want 0xFFFFFFFF (missing bits: 0x%08x - SetClearBits' read-modify-write wasn't atomic)", n, got, ^got)
+		var wg sync.WaitGroup
+		wg.Add(n)
+		for bit := 0; bit < n; bit++ {
+			go func(bit uint32) {
+				defer wg.Done()
+				if err := mem.SetClearBits(addr, 1<<bit, 0); err != nil {
+					t.Errorf("round %d: SetClearBits(bit %d): %v", round, bit, err)
+				}
+			}(uint32(bit))
+		}
+		wg.Wait()
+
+		got, err := mem.ReadReg32(addr)
+		if err != nil {
+			t.Fatalf("round %d: ReadReg32: %v", round, err)
+		}
+		if got != 0xFFFFFFFF {
+			t.Fatalf("round %d: after %d goroutines each setting one distinct bit: got 0x%08x, want 0xFFFFFFFF (missing bits: 0x%08x - SetClearBits' read-modify-write wasn't atomic)", round, n, got, ^got)
+		}
 	}
 }
 
@@ -267,7 +282,12 @@ func TestMem_WriteReg32_ConcurrentWritesNeverTorn(t *testing.T) {
 		valid[v] = true
 		go func(v uint32) {
 			defer wg.Done()
-			for round := 0; round < 200; round++ {
+			// 2000, not the original 200: a torn-write race (if one
+			// ever regressed) is a timing-window hit, not a
+			// guaranteed reproduction every run - 10x more write
+			// attempts per goroutine means 10x more chances to land
+			// in that window before this test declares victory.
+			for round := 0; round < 2000; round++ {
 				if err := mem.WriteReg32(addr, v); err != nil {
 					t.Errorf("WriteReg32: %v", err)
 					return
@@ -334,7 +354,12 @@ func TestMem_ReadReg32_NeverObservesATornValueDuringConcurrentWrites(t *testing.
 	for r := 0; r < readers; r++ {
 		go func() {
 			defer readersWG.Done()
-			for i := 0; i < 500; i++ {
+			// 5000, not the original 500: same reasoning as the
+			// writer-side round count above - more reads taken while
+			// writes are actively in flight means more chances to
+			// catch a torn value if the read/write locking ever
+			// regresses.
+			for i := 0; i < 5000; i++ {
 				got, err := mem.ReadReg32(addr)
 				if err != nil {
 					t.Errorf("ReadReg32: %v", err)
