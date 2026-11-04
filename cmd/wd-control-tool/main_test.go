@@ -2713,3 +2713,34 @@ func TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState(t *testing.T) {
 		}
 	}
 }
+
+// buildSleepAction's own real-send success path (mcu.Open succeeding
+// against a real port, then LCDSleep's write actually going out) had
+// no coverage at all - found via `go tool cover` (round 16): every
+// other real-hardware-confirmed action already has its own
+// "RealRun...SendsCorrectFrame" style test driven through a fake pty
+// (e.g. TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState just
+// above), but -s/--sleep was added without one. LCDSleep is pure
+// fire-and-forget (no verify-read, unlike EX2's RTC write), so this
+// is just as safely/synchronously testable as EX2U's own LED states.
+func TestRun_RealRun_Sleep_SendsCorrectFrame(t *testing.T) {
+	cases := []struct {
+		state string
+		value byte
+	}{
+		{"on", 0x01},
+		{"off", 0x00},
+	}
+	for _, c := range cases {
+		fake := fakemcu.New(t)
+		code, _, errOut := captureRun(t, []string{"-b", "ex4", "--serial", fake.SlavePath, "-s", c.state})
+		if code != exitOK {
+			t.Fatalf("state=%q: code=%d err=%q", c.state, code, errOut)
+		}
+		got := fake.ReadFrame(t, 7, 2*time.Second)
+		want := []byte{0xFA, 0x04, 0x82, c.value, 0x00, 0x00, 0xFB}
+		if !bytes.Equal(got, want) {
+			t.Errorf("state=%q: wire bytes = % X, want % X", c.state, got, want)
+		}
+	}
+}
