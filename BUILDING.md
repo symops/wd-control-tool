@@ -712,6 +712,42 @@ loop from the (wrong) MCU-cache diagnosis is kept as defense in
 depth - it is not wrong to have, just not the actual fix, and it now
 essentially never needs to retry at all.
 
+A twelfth finding: implementing EX4's `-r r`/`-r s` (previously
+unimplemented - EX4's own `RDateAndTime` reply had never been
+captured) surfaced a real, previously-undetected bug in EX4's own
+write side. A live capture of `rtc -r` on real EX4 hardware decoded
+the reply cleanly (`FA 01 00 03 07 57 52 20 03 04 11 26 FB`, year/
+mon/dom/hour/min/sec all exactly matching the printed date) - but the
+vendor's own print line said "Tue" for 2026-11-04, which is actually
+a Wednesday (2026-11-01 is a Sunday, used elsewhere in this project's
+own tests). The decoded `dow` byte was `3`, byte-for-byte identical
+to what this tool had itself written moments earlier in the same
+capture - ruling out a storage-side transform - so the only
+explanation is that EX4's own firmware expects `dow` as
+`1=Sunday..7=Saturday`, not EX2's (separately, hardware-confirmed)
+`0=Sunday..6=Saturday`. `EX4Writer.Set` had been sending the plain
+0-indexed value, with a doc comment claiming this was "confirmed
+day-by-day for all 7 days" - that claim only ever checked the byte
+the method itself wrote, never the vendor's own interpretation of it,
+since EX4 had no read support to check against until now. Fixed
+(`dow := int(t.Weekday()) + 1`); this tool's own printed weekday was
+never actually wrong for EX4 either way, since `buildRTCReadAction`
+computes it from `time.Date(...).Weekday()` off the real year/mon/dom
+fields, not from the wire's own dow byte - only the RAW BYTE SENT TO
+THE MCU was wrong, silently, until a read-back capture could finally
+check it.
+
+A smaller, process-level lesson from the same work: `make strip`'s
+real armv7/armv5 cross-compile caught a build failure (`EX4FanTachAddr`,
+`0xf1010150`, overflowing a plain 32-bit `int`) that `go vet`/`go test`
+never catch, since those always run on this project's amd64 dev host,
+where `int` is 64 bits. An untyped Go constant passed to an
+`interface{}`/`any` parameter (`fmt.Sprintf`, in that case) defaults
+to plain `int`, not `int64` - any future register-address constant
+above `0x7fffffff` needs an explicit `int64` type at its own
+declaration, not just at its use site, or this surfaces again as a
+cross-compile-only failure.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

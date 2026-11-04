@@ -5,11 +5,10 @@
 //
 //   - SYS -> RTC (the real rtc binary's "-w"): confirmed for both
 //     EX4 and EX2 (EX2Writer/EX4Writer).
-//   - RTC -> SYS (the real rtc binary's "-r"/"-s"): confirmed for EX2
-//     only (EX2Reader) - a live UART capture of the real `rtc -r` on
-//     real EX2 hardware decoded RDateAndTime's reply frame (see
-//     pkg/mcu's EX2DecodeDateAndTime). EX4's own RDateAndTime reply
-//     has not had that same capture done - see ErrEX4ReadNotImplemented.
+//   - RTC -> SYS (the real rtc binary's "-r"/"-s"): confirmed for both
+//     EX2 (EX2Reader) and EX4 (EX4Reader) - a live UART capture of the
+//     real `rtc -r` on each board decoded RDateAndTime's reply frame
+//     (see pkg/mcu's EX2DecodeDateAndTime/EX4DecodeDateAndTime).
 //
 // The MCU's RTC stores UTC, not local time - confirmed on real EX2
 // hardware (`date` vs. the vendor `ex2.sh "rtc -w"`'s own "system
@@ -46,10 +45,26 @@ import (
 // whenever the host's timezone wasn't already UTC.
 type EX4Writer struct{ MCU *mcu.EX4 }
 
+// dow is Go's own Weekday() PLUS ONE (1=Sunday..7=Saturday), NOT
+// EX2's 0=Sunday..6=Saturday convention - confirmed wrong the hard
+// way, not assumed: an earlier version of this method used the plain
+// 0-indexed value (matching EX2, and this method's own doc comment
+// claimed it was "confirmed day-by-day for all 7 days" - that claim
+// only ever checked the byte THIS method wrote, never the vendor's
+// own interpretation of it, since EX4 had no read support to check
+// against). A live capture of `rtc -w` immediately followed by `rtc
+// -r` on real EX4 hardware caught it: wrote dow=3 for 2026-11-04 (a
+// Wednesday - 2026-11-01 is a Sunday, used elsewhere in this
+// project's own tests), read back the SAME raw byte (3, unchanged -
+// confirmed not a storage-side transform), yet the vendor's own `rtc
+// -r` printed "Tue" for it - only consistent with the vendor's own
+// weekday-name table expecting 1=Sunday, not 0=Sunday. +1 here is
+// the fix on the write side, not a guess: it's the one value that
+// makes EX4's own read-back agree with the real calendar date.
 func (w EX4Writer) Set(t time.Time) error {
 	t = t.UTC()
 	year, mon, dom := t.Date()
-	dow := int(t.Weekday()) // 0=Sunday, matching the vendor's own dow convention - confirmed day-by-day for all 7 days, see TestEX4Writer_Set_WeekdayEncoding
+	dow := int(t.Weekday()) + 1
 	return w.MCU.SetDateAndTime(year, int(mon), dom, dow, t.Hour(), t.Minute(), t.Second())
 }
 
@@ -103,6 +118,32 @@ func (r EX2Reader) Read(timeout time.Duration) (t time.Time, ok bool, err error)
 	return time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.UTC), true, nil
 }
 
+// EX4Reader reads EX4's MCU RTC - hardware-confirmed (see pkg/mcu's
+// EX4DecodeDateAndTime). Same UTC tagging as EX2Reader, same reasoning.
+//
+// Read returns the RAW dow byte EX4DecodeDateAndTime decoded
+// (0-6, like EX2's) buried inside the returned time.Time's own
+// Weekday() - time.Date computes Weekday() from year/mon/dom itself,
+// ignoring the wire's dow field entirely, so EX4's 1-7 vs EX2's 0-6
+// convention never surfaces here at all; it only ever matters to
+// EX4Writer.Set, which has to produce it.
+type EX4Reader struct{ MCU *mcu.EX4 }
+
+func (r EX4Reader) Read(timeout time.Duration) (t time.Time, ok bool, err error) {
+	reply, err := r.MCU.DateAndTimeReply(timeout)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if len(reply) == 0 {
+		return time.Time{}, false, nil
+	}
+	year, mon, dom, _, hour, min, sec, err := mcu.EX4DecodeDateAndTime(reply)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.UTC), true, nil
+}
+
 // SetSystemTime sets the host's own system clock to t - the second
 // half of the real `rtc -s` (RTC -> SYS): a caller first reads the
 // MCU's RTC (EX2Reader.Read, or the CLI's own equivalent), then
@@ -118,12 +159,3 @@ func SetSystemTime(t time.Time) error {
 	}
 	return nil
 }
-
-// ErrEX4ReadNotImplemented: EX4's RDateAndTime reply frame has not
-// had the live-capture treatment EX2's got (see pkg/mcu's
-// EX2DecodeDateAndTime) - guessing it from EX2's now-confirmed shape
-// would violate this project's own rule against guessing MCU frame
-// layouts without a live capture of THIS board specifically (EX2 and
-// EX4 already disagree on WDateAndTime's own header bytes, so there
-// is no reason to assume the reply shape carries over either).
-var ErrEX4ReadNotImplemented = fmt.Errorf("rtc: EX4's RTC read framing is not confirmed yet - see pkg/mcu/ex4.go")

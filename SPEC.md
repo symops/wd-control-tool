@@ -682,30 +682,45 @@ vendor tool directly, not by reasoning about it.
   battery as corruption): it only ever compares against a value this
   same call just wrote, never against an absolute plausibility
   threshold.
-- **Read (RTC -> SYS)**: confirmed for **EX2 only** - a live capture
-  of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43) decoded the
-  reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` - the request's own
-  5-byte header echoed back verbatim, followed by the same 7-field
-  BCD payload order the write side uses (`sec,min,hour,dow,dom,mon,
-  year`), confirmed field-by-field against the printed date. This was
-  the single biggest open item in this whole spec (see "Unresolved")
-  - now resolved for EX2. **EX4's own `RDateAndTime` reply has not
-  had the same capture** - do not assume it matches EX2's shape (EX2
-  and EX4 already disagree on `WDateAndTime`'s own header bytes, so
-  there's no reason to assume the reply does carry over either); see
-  `pkg/rtc.ErrEX4ReadNotImplemented`. Rapid-fire repeated
-  `RDateAndTime` requests (e.g. several `-r r` actions chained with
-  zero think-time in one command) were found to get corrupted/stale
-  replies after the first one - **not an MCU timing issue**: a fixed
-  pre-request pause had zero measurable effect, and the real cause
-  was a bug on this tool's own side (`Port.recvBytes`,
-  `pkg/mcu/serial.go`, now fixed - see BUILDING.md for the full
-  story). `cmd/wd-control-tool/main.go`'s
-  `buildRTCReadAction` also retries a decode failure a few times as
-  defense in depth, since this protocol still has no checksum or
-  acknowledgement either way.
+- **Read (RTC -> SYS)**: confirmed for **both EX2 and EX4** - a live
+  capture of `rtc -r` (RTC itself reading 2026/11/2 Mon 13:39:43 on
+  EX2) decoded the reply: `FA 01 08 01 01 43 39 13 01 02 11 26 FB` -
+  the request's own 5-byte header echoed back verbatim, followed by
+  the same 7-field BCD payload order the write side uses
+  (`sec,min,hour,dow,dom,mon,year`), confirmed field-by-field against
+  the printed date. This was the single biggest open item in this
+  whole spec (see "Unresolved") - now resolved for both boards.
+  **EX4's own `RDateAndTime` reply does NOT echo its own request
+  header** (unlike EX2): a live capture on real EX4 hardware (RTC
+  reading 2026/11/4 20:52:57 UTC) decoded `FA 01 00 03 07 57 52 20 03
+  04 11 26 FB` - the request's own b7 is `01`, but the reply's is
+  `07` instead (the same byte WDateAndTime's own table uses, not
+  RDateAndTime's) - see `mcu.EX4DecodeDateAndTime`'s own doc comment.
+  **EX4's `dow` byte uses a DIFFERENT convention than EX2's**,
+  confirmed by the SAME capture: the decoded dow was `3`, matching
+  exactly what had just been written moments earlier (so NOT a
+  storage-side transform), yet the vendor's own `rtc -r` printed
+  "Tue" for it - 2026-11-04 is actually a Wednesday (2026-11-01 is a
+  Sunday). Only consistent with EX4's firmware expecting
+  `1=Sunday..7=Saturday`, not EX2's (also hardware-confirmed)
+  `0=Sunday..6=Saturday`. Fixed on the write side
+  (`rtc.EX4Writer.Set` now sends `Weekday()+1`); the read side
+  (`EX4DecodeDateAndTime`) returns the raw byte as-is, same as EX2's
+  decoder - this tool's own printed weekday is always computed from
+  the date itself (`time.Date(...).Weekday()`), never from the wire's
+  dow byte, so it doesn't inherit the vendor's own mislabeling either
+  way. Rapid-fire repeated `RDateAndTime` requests (e.g. several
+  `-r r` actions chained with zero think-time in one command) were
+  found to get corrupted/stale replies after the first one on EX2 -
+  **not an MCU timing issue**: a fixed pre-request pause had zero
+  measurable effect, and the real cause was a bug on this tool's own
+  side (`Port.recvBytes`, `pkg/mcu/serial.go`, now fixed - see
+  BUILDING.md for the full story). `cmd/wd-control-tool/main.go`'s
+  `buildRTCReadAction` also retries a decode failure a few times
+  (shared by both boards) as defense in depth, since this protocol
+  still has no checksum or acknowledgement either way.
 - **Sync (RTC -> SYS, also setting the host's system clock, `rtc
-  -s`)**: for EX2, this is just the read above plus
+  -s`)**: for both EX2 and EX4, this is just the read above plus
   `settimeofday(2)` (`pkg/rtc.SetSystemTime`) - no separate MCU
   capture needed. The clock-setting side effect itself is real and
   hardware/OS-affecting, so (unlike every other confirmed behavior in

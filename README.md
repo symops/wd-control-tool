@@ -17,11 +17,12 @@ config daemon, no message-queue relay, no `/tmp` file polling.
 See `SPEC.md` for the full, reverse-engineered hardware reference
 this implementation follows - including what is still unconfirmed
 or unimplemented. Most MCU commands remain fire-and-forget (no reply
-ever parsed), but three MCU reads are now confirmed and implemented:
-EX2U's temperature (`-t`), EX2's fan RPM (`-f rpm`) and EX2's RTC
-(`-r r`/`-r s`) - see SPEC.md, "Request/response and acknowledgement".
-EX4 also has its own `-f rpm`, but it's not an MCU command at all - a
-direct `/dev/mem` register read (confirmed by decompiling the real
+ever parsed), but four MCU reads are now confirmed and implemented:
+EX2U's temperature (`-t`), EX2's fan RPM (`-f rpm`) and both boards'
+RTC (`-r r`/`-r s`) - see SPEC.md, "Request/response and
+acknowledgement". EX4 also has its own `-f rpm`, but it's not an MCU
+command at all - a direct `/dev/mem` register read (confirmed by
+decompiling the real
 `libshare.so`), see SPEC.md's "Fan RPM read-back (EX4)".
 
 ## Download
@@ -93,8 +94,8 @@ fails stops the rest - later actions in the same command never run.
 | `-l`, `--led` | ex2u | `STATE` | states: `on`, `off`, `blinking` (or `blink`), `breathing` (or `breathe`) - EX2U's single status LED, not a zone/color scheme. |
 | `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated or paginated at the LCD's own 16-char width - see SPEC.md. Taken verbatim, even if it looks like a flag (e.g. starts with `-`). Max 255 bytes (the wire format's own LEN field is one byte wide), and may not contain a literal 0xFA/0xFB byte or be exactly 250/251 bytes long (the wire protocol's own start/end markers - see SPEC.md); any of these is rejected with an error, not silently sent. |
 | `-r`, `--rtc` | ex2, ex4 | `w` | Pushes the host's current time to the MCU RTC, converted to UTC first - the RTC stores UTC, not local time (confirmed on real hardware, see SPEC.md's "RTC"; `-D`'s frame preview reflects the UTC value, not the host's local one). Prints `rtc: system time: YYYY/M/D Mon HH:MM:SS`, matching the vendor `rtc -w`'s own wording - no ack from the MCU either way, this is fire-and-forget on both boards. |
-| `-r`, `--rtc` | ex2 | `r` | Reads the MCU RTC and prints it in UTC, unconverted - matching the vendor `rtc -r`'s own wording and behavior exactly (`rtc: RTC time = YYYY/M/D Mon HH:MM:SS`) - hardware-confirmed. **EX4 not yet implemented** (reply frame unconfirmed - see SPEC.md). |
-| `-r`, `--rtc` | ex2 | `s` | Like `r`, and also sets the host's own system clock from the result (correctly, as an absolute UTC moment - the host's own local timezone is applied automatically, same as any other system-clock write) - hardware-confirmed for the read; the system-clock-set side effect is not exercised by this project's own automated tests (see BUILDING.md). **EX4 not yet implemented**, same reason as `r`. |
+| `-r`, `--rtc` | ex2, ex4 | `r` | Reads the MCU RTC and prints it in UTC, unconverted - matching the vendor `rtc -r`'s own wording exactly (`rtc: RTC time = YYYY/M/D Mon HH:MM:SS`) - hardware-confirmed on both boards. The printed weekday always comes from the date itself (year/month/day), never the wire's own dow byte - see SPEC.md's "RTC" for why that matters specifically on EX4 (its vendor tool prints the wrong weekday for a correctly-written date; this tool doesn't inherit that). |
+| `-r`, `--rtc` | ex2, ex4 | `s` | Like `r`, and also sets the host's own system clock from the result (correctly, as an absolute UTC moment - the host's own local timezone is applied automatically, same as any other system-clock write) - hardware-confirmed for the read on both boards; the system-clock-set side effect is not exercised by this project's own automated tests (see BUILDING.md). |
 | `-t`, `--temp` | ex2u | (none) | Sends the `tmp_get` request and prints `Temperature: N C` (hardware-confirmed from one live capture - see SPEC.md's "EX2U protocol"). Prints "no reply" rather than failing if nothing arrives within 2s. Use `-D` to see the raw reply bytes (`debug: reply=...`), same as any other command's `-D` output. |
 
 No generic "all boards" fallback exists anywhere: every command's

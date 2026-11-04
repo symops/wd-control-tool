@@ -1,6 +1,9 @@
 package mcu
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // EX4's legacy MCU, /dev/ttyS1, 19200 8N1.
 //
@@ -10,9 +13,21 @@ import "fmt"
 // full dump). Do not hand-edit these constants without re-extracting
 // from the binary: they are not derived from any documented spec.
 var (
-	ex4FanControl     = legacyCmd{"FanControl", 0x02, 0x00, 0x00, 0x00, 0x00}
-	ex4RDateAndTime   = legacyCmd{"RDateAndTime", 0x01, 0x00, 0x03, 0x01, 0x00}
-	ex4WDateAndTime   = legacyCmd{"WDateAndTime", 0x01, 0x00, 0x04, 0x07, 0x00}
+	ex4FanControl   = legacyCmd{"FanControl", 0x02, 0x00, 0x00, 0x00, 0x00}
+	ex4RDateAndTime = legacyCmd{"RDateAndTime", 0x01, 0x00, 0x03, 0x01, 0x00}
+	ex4WDateAndTime = legacyCmd{"WDateAndTime", 0x01, 0x00, 0x04, 0x07, 0x00}
+
+	// ex4RDateAndTimeReplyHeader: the real RDateAndTime REPLY's own
+	// header, as 5 bytes (FA b4 b5 b6 b7) - confirmed via a live
+	// strace of the real `rtc -r` on real EX4 hardware. NOT the same
+	// as ex4RDateAndTime's own request header above (b7 differs: the
+	// request's own b7=01 is the table's value, used unmodified; the
+	// reply's b7 is 07 instead - the same byte as WDateAndTime's own
+	// table b7, not RDateAndTime's). Unlike EX2 (whose RDateAndTime
+	// reply echoes its OWN request header verbatim), EX4's reply
+	// header does NOT match its own request - see EX4DecodeDateAndTime
+	// for the full captured example.
+	ex4RDateAndTimeReplyHeader = []byte{0x01, 0x00, 0x03, 0x07}
 	ex4SysName        = legacyCmd{"SysName", 0x04, 0x01, 0x00, 0x00, 0x00}
 	ex4DeviceReady    = legacyCmd{"DeviceReady", 0x03, 0x01, 0x00, 0x00, 0x00}
 	ex4DeviceShutdown = legacyCmd{"DeviceShutdown", 0x03, 0x03, 0x01, 0x01, 0x00}
@@ -50,12 +65,70 @@ func (m *EX4) DeviceReady() error {
 	return sendLegacy(m.p, buildFixedFrame(ex4DeviceReady))
 }
 
-// RequestDateAndTime sends the read request; the MCU's reply framing
-// was not decoded (see SPEC.md, "unresolved") so this tool cannot yet
-// parse the response itself - included for completeness/symmetry with
-// WDateAndTime, not yet called from the fan/rtc/led command layer.
+// EX4DateTimeRequestFrame is RDateAndTime's fixed request frame - the
+// pure builder -n/--dry-run and -D/--debug use.
+func EX4DateTimeRequestFrame() []byte { return buildFixedFrame(ex4RDateAndTime) }
+
+// RequestDateAndTime sends RDateAndTime's request.
 func (m *EX4) RequestDateAndTime() error {
 	return sendLegacy(m.p, buildFixedFrame(ex4RDateAndTime))
+}
+
+// DateAndTimeReply sends RDateAndTime's request and returns whatever
+// raw bytes the MCU replies with within timeout - possibly none. Same
+// split as EX2's own (undecoded bytes here, EX4DecodeDateAndTime
+// layered on top).
+func (m *EX4) DateAndTimeReply(timeout time.Duration) ([]byte, error) {
+	return m.p.sendAndRecv(m.RequestDateAndTime, timeout)
+}
+
+// EX4DecodeDateAndTime decodes an RDateAndTime reply (as returned by
+// DateAndTimeReply) into year/mon/dom/dow/hour/min/sec.
+//
+// Hardware-confirmed: a live strace of the real `rtc -r` on real EX4
+// hardware, while it printed "rtc: RTC time = 2026/11/4 Tue
+// 20:52:57", captured the reply
+// FA 01 00 03 07 57 52 20 03 04 11 26 FB - NOT the request's own
+// header echoed back (unlike EX2's RDateAndTime) - see
+// ex4RDateAndTimeReplyHeader's own doc comment for the b7 mismatch -
+// followed by the same 7-field BCD payload order WDateAndTime's
+// write side uses (sec,min,hour,dow,dom,mon,year - see
+// EX4DateTimeFrame), confirmed field-by-field against the printed
+// date: sec=0x57->57, min=0x52->52, hour=0x20->20, dom=0x04->4,
+// mon=0x11->11, year=0x26->2026 - exact.
+//
+// dow=0x03->3 is the ONE field that does NOT match EX2's convention:
+// the vendor tool printed "Tue" for a stored dow of 3, but 2026-11-04
+// is actually a Wednesday (confirmed: 2026-11-01 is a Sunday, used
+// elsewhere in this project's own tests/SPEC.md) - i.e. the vendor's
+// own weekday-name lookup expects 1=Sunday..7=Saturday, NOT EX2's
+// (confirmed, hardware-verified) 0=Sunday..6=Saturday. The raw byte
+// is read back completely unchanged from what was written moments
+// earlier in the same capture (confirmed: the `-D` write frame's own
+// dow byte was also 03) - so this is purely a difference in what the
+// VENDOR firmware expects on the wire, not a storage-side transform,
+// and the fix belongs on the write side (see rtc.EX4Writer.Set).
+// EX4DecodeDateAndTime itself returns the RAW dow byte as-is (0-6,
+// same range as EX2's decoder) - converting it to match the vendor's
+// 1-7 display convention, if ever needed, belongs to the caller, the
+// same way EX2Reader.Read doesn't do any such conversion either.
+//
+// Scans reply for the matching frame via findFrame rather than
+// assuming it starts at offset 0 - same reasoning as EX2's own
+// decoder (unsolicited noise frames can interleave).
+func EX4DecodeDateAndTime(reply []byte) (year, mon, dom, dow, hour, min, sec int, err error) {
+	frame, err := findFrame(reply, ex4RDateAndTimeReplyHeader, 13)
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, 0, err
+	}
+	sec = fromBCD(frame[5])
+	min = fromBCD(frame[6])
+	hour = fromBCD(frame[7])
+	dow = fromBCD(frame[8])
+	dom = fromBCD(frame[9])
+	mon = fromBCD(frame[10])
+	year = 2000 + fromBCD(frame[11])
+	return year, mon, dom, dow, hour, min, sec, nil
 }
 
 // validateDateTimeFields rejects out-of-range WDateAndTime fields
@@ -76,8 +149,16 @@ func validateDateTimeFields(year, mon, dom, dow, hour, min, sec int) error {
 		return fmt.Errorf("mcu: month must be 1-12, got %d", mon)
 	case dom < 1 || dom > 31:
 		return fmt.Errorf("mcu: day of month must be 1-31, got %d", dom)
-	case dow < 0 || dow > 6:
-		return fmt.Errorf("mcu: day of week must be 0-6, got %d", dow)
+	case dow < 0 || dow > 7:
+		// 0-7, not 0-6: EX2 uses 0=Sunday..6=Saturday, EX4 uses
+		// 1=Sunday..7=Saturday (both hardware-confirmed, see
+		// rtc.EX2Writer.Set/EX4Writer.Set's own doc comments for how
+		// EX4's was found to differ) - this validator is shared by
+		// both boards' DateTimeFrame builders, so it accepts the
+		// union of both ranges rather than knowing which board called
+		// it; each Writer only ever produces its own board's valid
+		// value either way.
+		return fmt.Errorf("mcu: day of week must be 0-7, got %d", dow)
 	case hour < 0 || hour > 23:
 		return fmt.Errorf("mcu: hour must be 0-23, got %d", hour)
 	case min < 0 || min > 59:

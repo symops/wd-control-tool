@@ -137,7 +137,13 @@ func TestEX4DateTimeFrame_RejectsOutOfRangeFields(t *testing.T) {
 		{"dow -1 (the actual bug: collides with a frame marker)", 2026, 1, 1, -1, 0, 0, 0},
 		{"dow -6 (collides with 0xFA)", 2026, 1, 1, -6, 0, 0, 0},
 		{"dow -5 (collides with 0xFB)", 2026, 1, 1, -5, 0, 0, 0},
-		{"dow 7", 2026, 1, 1, 7, 0, 0, 0},
+		// dow 7 is deliberately NOT tested as an error here: it's
+		// EX4's own valid "Saturday" (1=Sunday..7=Saturday, hardware-
+		// confirmed - see rtc.EX4Writer.Set) even though it's out of
+		// range for EX2 specifically (0=Sunday..6=Saturday) - this
+		// validator is shared by both boards and accepts the union of
+		// both ranges, see validateDateTimeFields's own doc comment.
+		{"dow 8", 2026, 1, 1, 8, 0, 0, 0},
 		{"hour -1", 2026, 1, 1, 0, -1, 0, 0},
 		{"hour 24", 2026, 1, 1, 0, 24, 0, 0},
 		{"min -1", 2026, 1, 1, 0, 0, -1, 0},

@@ -14,9 +14,10 @@ func TestEX4Writer_Set(t *testing.T) {
 	w := EX4Writer{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
 
 	// 2026-11-01 is a Sunday (2026-10-31, used elsewhere in this
-	// project's tests/SPEC.md, is a Saturday) - time.Weekday's
-	// encoding (0=Sunday) is used directly as the wire's dow field,
-	// so this also pins that no remapping is needed/happening.
+	// project's tests/SPEC.md, is a Saturday). dow=1, not 0: EX4 uses
+	// Go's time.Weekday()+1 (1=Sunday..7=Saturday), NOT EX2's plain
+	// 0-indexed value - see EX4Writer.Set's own doc comment for how
+	// that was found (hardware-confirmed, not assumed).
 	when := time.Date(2026, time.November, 1, 10, 20, 30, 0, time.UTC)
 
 	done := make(chan error, 1)
@@ -27,7 +28,7 @@ func TestEX4Writer_Set(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
-	want, err := mcu.EX4DateTimeFrame(2026, 11, 1, 0, 10, 20, 30)
+	want, err := mcu.EX4DateTimeFrame(2026, 11, 1, 1, 10, 20, 30)
 	if err != nil {
 		t.Fatalf("EX4DateTimeFrame: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestEX4Writer_Set_ConvertsNonUTCInputToUTC(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
-	want, err := mcu.EX4DateTimeFrame(2026, 11, 1, 0, 10, 20, 30) // the UTC fields, not the +03 ones
+	want, err := mcu.EX4DateTimeFrame(2026, 11, 1, 1, 10, 20, 30) // the UTC fields, not the +03 ones; dow=1 not 0, see TestEX4Writer_Set
 	if err != nil {
 		t.Fatalf("EX4DateTimeFrame: %v", err)
 	}
@@ -70,9 +71,15 @@ func TestEX4Writer_Set_ConvertsNonUTCInputToUTC(t *testing.T) {
 	}
 }
 
+// CONFIRMED BUG regression test: this used to assert dow bytes 0..6
+// Sun..Sat (plain Go Weekday(), no offset) and claimed that was
+// "confirmed day-by-day for all 7 days" - that claim only ever
+// checked the byte this method itself wrote, never the vendor's own
+// interpretation of it, since EX4 had no read support to check
+// against at the time. A live `rtc -w` + `rtc -r` capture on real EX4
+// hardware caught the real convention: 1..7 Sun..Sat (Go's Weekday()
+// PLUS ONE) - see EX4Writer.Set's own doc comment for the full story.
 func TestEX4Writer_Set_WeekdayEncoding(t *testing.T) {
-	// Confirm every day of one week maps dow 0..6 Sun..Sat, matching
-	// Go's own time.Weekday numbering, with no off-by-one.
 	base := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC) // Sunday
 	for i := 0; i < 7; i++ {
 		day := base.AddDate(0, 0, i)
@@ -86,18 +93,9 @@ func TestEX4Writer_Set_WeekdayEncoding(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatalf("day %d: Set: %v", i, err)
 		}
-		if int(got[8]) != i {
-			t.Errorf("day %d (%v): dow byte = %d, want %d", i, day.Weekday(), got[8], i)
+		if want := i + 1; int(got[8]) != want {
+			t.Errorf("day %d (%v): dow byte = %d, want %d", i, day.Weekday(), got[8], want)
 		}
-	}
-}
-
-func TestErrEX4ReadNotImplemented(t *testing.T) {
-	if ErrEX4ReadNotImplemented == nil {
-		t.Fatal("ErrEX4ReadNotImplemented is nil")
-	}
-	if ErrEX4ReadNotImplemented.Error() == "" {
-		t.Error("ErrEX4ReadNotImplemented has an empty message")
 	}
 }
 
@@ -222,6 +220,55 @@ func TestEX2Reader_Read(t *testing.T) {
 func TestEX2Reader_Read_IOErrorPropagates(t *testing.T) {
 	fake := fakemcu.New(t)
 	r := EX2Reader{MCU: mcu.NewEX2(mcu.OpenFile(fake.Slave))}
+	fake.Slave.Close()
+
+	if _, ok, err := r.Read(time.Second); err == nil {
+		t.Fatalf("Read after Close: want error, got nil (ok=%v)", ok)
+	}
+}
+
+func TestEX4Reader_Read(t *testing.T) {
+	fake := fakemcu.New(t)
+	r := EX4Reader{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
+
+	type result struct {
+		t   time.Time
+		ok  bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		got, ok, err := r.Read(3 * time.Second)
+		done <- result{got, ok, err}
+	}()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the RDateAndTime request
+	// Real-hardware worked example (2026-11-04 Wed 20:52:57, as the
+	// vendor's own rtc -r printed it, though it mislabeled the
+	// weekday as "Tue" - see mcu.EX4DecodeDateAndTime's own doc
+	// comment) - the reply's own header does NOT echo the request's
+	// (unlike EX2): b7 is 07, not the request's 01.
+	reply := []byte{0xFA, 0x01, 0x00, 0x03, 0x07, 0x57, 0x52, 0x20, 0x03, 0x04, 0x11, 0x26, 0xFB}
+	if _, err := fake.Master.Write(reply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("Read: %v", res.err)
+	}
+	if !res.ok {
+		t.Fatal("Read: ok=false, want true (a reply arrived)")
+	}
+	want := time.Date(2026, time.November, 4, 20, 52, 57, 0, time.UTC) // the RTC stores UTC - see EX4Writer's own doc comment
+	if !res.t.Equal(want) {
+		t.Errorf("Read = %v, want %v", res.t, want)
+	}
+}
+
+func TestEX4Reader_Read_IOErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	r := EX4Reader{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
 	fake.Slave.Close()
 
 	if _, ok, err := r.Read(time.Second); err == nil {

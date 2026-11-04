@@ -14,7 +14,6 @@ import (
 
 	"github.com/symops/wd-control-tool/pkg/board"
 	"github.com/symops/wd-control-tool/pkg/mcu"
-	"github.com/symops/wd-control-tool/pkg/rtc"
 	"github.com/symops/wd-control-tool/test/fakemcu"
 )
 
@@ -658,32 +657,65 @@ func TestRun_RealRun_RTCWrite_PrintsSystemTimeLine(t *testing.T) {
 	}
 }
 
-// rtc.ErrEX4ReadNotImplemented is exported specifically so a caller
-// can check for it with errors.Is - mirrors the same contract the
-// now-removed ErrEX2NotImplemented used to pin (see git history),
-// just for EX4's still-unconfirmed read direction instead of EX2's
-// now-confirmed write.
-func TestBuildRTCAction_EX4_ReadAndSync_PlanErrIsErrEX4ReadNotImplemented(t *testing.T) {
+func TestRun_DryRun_RTCReadAndSync_EX4(t *testing.T) {
 	for _, sub := range []string{"r", "s"} {
-		act, code := buildRTCAction(board.EX4, "/dev/ttyS1", []string{sub}, false)
-		if code != exitOK || act == nil {
-			t.Fatalf("buildRTCAction(EX4, %q): act=%v code=%d", sub, act, code)
+		code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-r", sub})
+		if code != exitOK {
+			t.Fatalf("rtc %q: code=%d out=%q", sub, code, out)
 		}
-		if !errors.Is(act.planErr, rtc.ErrEX4ReadNotImplemented) {
-			t.Errorf("rtc %q: planErr = %v, want errors.Is(planErr, rtc.ErrEX4ReadNotImplemented) to hold", sub, act.planErr)
+		if !strings.Contains(out, "FA 01 00 03 01 00 FB") {
+			t.Errorf("rtc %q: out=%q, want the RDateAndTime request frame", sub, out)
+		}
+		if !strings.Contains(out, "request the current time") {
+			t.Errorf("rtc %q: out=%q, missing the dry-run description line", sub, out)
 		}
 	}
 }
 
-func TestRun_RTCReadAndSync_UnimplementedOnEX4_RealRun(t *testing.T) {
-	for _, sub := range []string{"r", "s"} {
-		code, _, errOut := captureRun(t, []string{"-b", "ex4", "-r", sub})
-		if code != exitUsage {
-			t.Errorf("rtc %q: code=%d, want %d", sub, code, exitUsage)
-		}
-		if !strings.Contains(errOut, "not confirmed yet") {
-			t.Errorf("rtc %q: errOut=%q, want it to mention EX4's RTC read gap", sub, errOut)
-		}
+// Golden-byte test against the real capture of `rtc -r` on real EX4
+// hardware (see mcu.EX4DecodeDateAndTime's own doc comment) - note
+// this asserts "Wed", not the vendor's own (confirmed wrong) "Tue":
+// this tool's printed weekday always comes from time.Date's own
+// Weekday() computed off year/mon/dom (see buildRTCReadAction's own
+// doc comment), never from the wire's raw dow byte, so it can't
+// inherit the vendor's dow-convention mismatch on the read/display
+// side even though that mismatch is real on the write side (see
+// rtc.EX4Writer.Set).
+func TestRun_RealRun_RTCRead_EX4_DecodesRealCapturedReply(t *testing.T) {
+	fake := fakemcu.New(t)
+
+	a, code := buildRTCAction(board.EX4, fake.SlavePath, []string{"r"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildRTCAction: code=%d", code)
+	}
+
+	origOut := os.Stdout
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = outW
+	outCh := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(outR); outCh <- string(b) }()
+
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- a.apply() }()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the RDateAndTime request
+	realCapturedReply := []byte{0xFA, 0x01, 0x00, 0x03, 0x07, 0x57, 0x52, 0x20, 0x03, 0x04, 0x11, 0x26, 0xFB}
+	if _, err := fake.Master.Write(realCapturedReply); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	if err := <-applyDone; err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	outW.Close()
+	os.Stdout = origOut
+	out := <-outCh
+
+	if !strings.Contains(out, "rtc: RTC time = 2026/11/4 Wed 20:52:57") {
+		t.Errorf("stdout=%q, want the decoded RTC time line (Wed, not the vendor's own Tue)", out)
 	}
 }
 

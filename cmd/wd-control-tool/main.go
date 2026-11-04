@@ -804,7 +804,17 @@ func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
 
 	switch b {
 	case board.EX4:
-		frame, ferr := mcu.EX4DateTimeFrame(year, int(mon), dom, dow, utc.Hour(), utc.Minute(), utc.Second())
+		// +1, not the plain dow above: EX4 uses 1=Sunday..7=Saturday,
+		// not EX2's 0=Sunday..6=Saturday - see rtc.EX4Writer.Set's own
+		// doc comment for how that was confirmed. This preview frame
+		// must match EX4Writer.Set(now)'s own internal computation
+		// exactly (same -D accuracy promise as this function's top
+		// comment) - found by TestRun_RTCWrite_RealRunSendsExactlyTheFrameDebugPrinted
+		// failing after EX4Writer.Set's own dow fix, since this line
+		// has its own separate copy of the computation, not a shared
+		// helper.
+		ex4Dow := dow + 1
+		frame, ferr := mcu.EX4DateTimeFrame(year, int(mon), dom, ex4Dow, utc.Hour(), utc.Minute(), utc.Second())
 		return &action{
 			describe:   fmt.Sprintf("write current time (%s) to EX4 MCU RTC (%s)", now.Format(time.RFC3339), serialPath),
 			debugLines: frameDebugLines(ferr, frame, serialPath, 19200),
@@ -852,27 +862,52 @@ func buildRTCWriteAction(b board.Board, serialPath string) (*action, int) {
 // the host's system clock): sync is identical to read except for
 // what happens with the decoded time, so sharing one builder avoids
 // duplicating the whole request/reply/decode plumbing for a
-// one-line difference. EX2-only: EX4's RDateAndTime reply has not
-// had the same live-capture decode treatment (see
-// rtc.ErrEX4ReadNotImplemented).
+// one-line difference. Both EX2 and EX4 are supported - each board's
+// request frame/baud/reply decoder differ (see mcu.EX2DecodeDateAndTime/
+// EX4DecodeDateAndTime's own doc comments for how each was
+// confirmed), captured below via a few small per-board closures
+// rather than duplicating the whole retry/print/sync body twice.
 func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*action, int) {
-	if b != board.EX2 {
+	var (
+		baud         int
+		boardName    string
+		requestFrame []byte
+		getReply     func(p *mcu.Port) ([]byte, error)
+		decode       func(reply []byte) (year, mon, dom, hour, min, sec int, err error)
+	)
+	switch b {
+	case board.EX2:
+		baud, boardName = ex2LegacyBaud, "EX2"
+		requestFrame = mcu.EX2DateTimeRequestFrame()
+		getReply = func(p *mcu.Port) ([]byte, error) { return mcu.NewEX2(p).DateAndTimeReply(ex2RTCReplyTimeout) }
+		decode = func(reply []byte) (year, mon, dom, hour, min, sec int, err error) {
+			year, mon, dom, _, hour, min, sec, err = mcu.EX2DecodeDateAndTime(reply)
+			return
+		}
+	case board.EX4:
+		baud, boardName = 19200, "EX4"
+		requestFrame = mcu.EX4DateTimeRequestFrame()
+		getReply = func(p *mcu.Port) ([]byte, error) { return mcu.NewEX4(p).DateAndTimeReply(ex2RTCReplyTimeout) }
+		decode = func(reply []byte) (year, mon, dom, hour, min, sec int, err error) {
+			year, mon, dom, _, hour, min, sec, err = mcu.EX4DecodeDateAndTime(reply)
+			return
+		}
+	default:
 		verb := "read"
 		if sync {
 			verb = "sync"
 		}
 		return &action{
 			describe: fmt.Sprintf("%s the MCU RTC", verb),
-			planErr:  rtc.ErrEX4ReadNotImplemented,
+			planErr:  fmt.Errorf("rtc %s is not supported on board %v", verb, b),
 		}, exitOK
 	}
 
-	frame := mcu.EX2DateTimeRequestFrame()
 	return &action{
-		describe:   fmt.Sprintf("request the current time from EX2 MCU RTC (%s)", serialPath),
-		debugLines: frameDebugLines(nil, frame, serialPath, ex2LegacyBaud),
+		describe:   fmt.Sprintf("request the current time from %s MCU RTC (%s)", boardName, serialPath),
+		debugLines: frameDebugLines(nil, requestFrame, serialPath, baud),
 		apply: func() error {
-			p, err := mcu.Open(serialPath, ex2LegacyBaud)
+			p, err := mcu.Open(serialPath, baud)
 			if err != nil {
 				return err
 			}
@@ -882,12 +917,16 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 			// returns immediately below - see ex2RTCMaxAttempts) up to
 			// ex2RTCMaxAttempts times; each attempt re-flushes and
 			// re-sends via DateAndTimeReply, not just re-reading
-			// whatever's already buffered.
+			// whatever's already buffered. Reused as-is for EX4 - this
+			// is defense against a genuine decode failure (garbled/no
+			// reply), not specific to EX2's own now-understood-and-
+			// fixed write-then-read corruption (see BUILDING.md), so
+			// there's no reason it wouldn't also help EX4.
 			var reply []byte
 			var year, mon, dom, hour, min, sec int
 			var derr error
 			for attempt := 1; ; attempt++ {
-				reply, err = mcu.NewEX2(p).DateAndTimeReply(ex2RTCReplyTimeout)
+				reply, err = getReply(p)
 				if err != nil {
 					return err
 				}
@@ -898,7 +937,7 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 					fmt.Printf("rtc: no reply from MCU within %v\n", ex2RTCReplyTimeout)
 					return nil
 				}
-				year, mon, dom, _, hour, min, sec, derr = mcu.EX2DecodeDateAndTime(reply)
+				year, mon, dom, hour, min, sec, derr = decode(reply)
 				if derr == nil || attempt >= ex2RTCMaxAttempts {
 					break
 				}
@@ -915,7 +954,12 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 			// unconverted "RTC time = ..." wording below, and matching
 			// the real absolute moment SetSystemTime(t) needs for
 			// "s" to actually set the right system time rather than
-			// one off by the host's own timezone offset.
+			// one off by the host's own timezone offset. The decoded
+			// dow (discarded above, both boards) is never used here:
+			// time.Date computes its own Weekday() from year/mon/dom,
+			// which is also why EX4's own 1-7 vs EX2's 0-6 dow
+			// convention (see rtc.EX4Writer.Set) never has to be
+			// reconciled on the read side at all.
 			t := time.Date(year, time.Month(mon), dom, hour, min, sec, 0, time.UTC)
 			fmt.Printf("rtc: RTC time = %s\n", t.Format(rtcTimeLayout))
 			if !sync {
