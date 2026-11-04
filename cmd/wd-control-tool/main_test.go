@@ -2003,6 +2003,7 @@ func TestModeNameFor(t *testing.T) {
 		"-r": "rtc", "--rtc": "rtc",
 		"-d": "display", "--display": "display",
 		"-t": "temp", "--temp": "temp",
+		"-s": "sleep", "--sleep": "sleep",
 		"-x": "", "--unknown": "", "": "",
 	}
 	for flag, want := range cases {
@@ -2025,6 +2026,7 @@ func TestArityFor(t *testing.T) {
 		{"led", board.EX2, 3},
 		{"led", board.EX4, 3},
 		{"temp", board.EX2U, 0},
+		{"sleep", board.EX4, 1},
 	}
 	for _, c := range cases {
 		if got := arityFor(c.mode, c.b); got != c.want {
@@ -2239,6 +2241,9 @@ func FuzzParseArgs_NeverPanics(f *testing.F) {
 		"-b ex4 -l power",
 		"-b ex4 -l power blue",
 		"-h -v -b ex4 -f 1",
+		"-b ex4 -s on",
+		"-s",
+		"--sleep",
 	} {
 		f.Add(seed)
 	}
@@ -2305,6 +2310,9 @@ func FuzzRun_NeverPanics(f *testing.F) {
 		"-h",
 		"-v",
 		"",
+		"-b ex4 -s on",
+		"-b ex4 --sleep off",
+		"-b ex2 -s on",
 	} {
 		f.Add(seed)
 	}
@@ -2338,6 +2346,7 @@ func TestRun_UsageExamplesActuallyWork(t *testing.T) {
 		{"-b", "ex2", "-f", "3"},
 		{"-b", "ex4", "--display", "Booting..."},
 		{"-b", "ex2", "--led", "power", "blue", "on", "-f", "1"},
+		{"-b", "ex4", "--sleep", "on"},
 	}
 	for _, args := range examples {
 		withDryRun := append(append([]string{}, args...), "-n")
@@ -2362,6 +2371,7 @@ func TestRun_ReadmeExamplesActuallyWork(t *testing.T) {
 		{"-b", "ex4", "-f", "2"},
 		{"-b", "ex4", "--led", "power", "blue", "on"},
 		{"-b", "ex4", "--display", "Booting..."},
+		{"-b", "ex4", "--sleep", "on"},
 		{"-b", "ex4", "-r", "w"},
 		{"-b", "ex2", "--led", "power", "blue", "on", "-f", "1"},
 		{"-b", "ex4", "-n", "-D", "--led", "power", "blue", "on"},
