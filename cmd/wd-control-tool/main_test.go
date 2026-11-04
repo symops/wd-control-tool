@@ -960,6 +960,30 @@ func TestRun_RTCUnsupportedOnEX2U(t *testing.T) {
 	}
 }
 
+// buildRTCReadAction has its OWN separate "unsupported board" default
+// branch from buildRTCWriteAction's (found via `go tool cover` - "r"/
+// "s" never reached it, only "w" did, via the test above), and it is
+// NOT shaped the same way: buildRTCWriteAction's default calls
+// unsupportedErr directly (nil action, exitUnsupported immediately),
+// but buildRTCReadAction's wraps the error in a normal planErr'd
+// action (exitOK, reported as "would fail" under -n) - the same
+// "would fail" convention every other board/zone validation error in
+// this file uses. "r" and "s" each build their own action value (see
+// buildRTCAction's dispatch), so both need their own case, not just
+// one of them.
+func TestRun_RTCReadSyncUnsupportedOnEX2U(t *testing.T) {
+	for _, sub := range []string{"r", "s"} {
+		code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-r", sub})
+		if code != exitOK {
+			t.Errorf("rtc %q: code=%d err=%q, want exitOK (reported via \"would fail\", not exitUnsupported)", sub, code, errOut)
+			continue
+		}
+		if !strings.Contains(out, "would fail") {
+			t.Errorf("rtc %q: out=%q, want \"would fail\"", sub, out)
+		}
+	}
+}
+
 // Regression test: buildRTCAction used to capture `now` once for the
 // -D debug preview but call time.Now() a SECOND time inside apply()
 // for the actual write - so a real run's frame could carry different
