@@ -559,7 +559,10 @@ regardless of which zone was requested (matching the vendor's own
 behavior byte-for-byte, surprising as it is); blue `blinking` reports
 an error (`errHDBayBlueBlinkingNotImplementedEX4`) rather than
 silently doing nothing, since the vendor's own code has no such branch
-either.
+either. **Confirmed working on real EX4 hardware** by the user
+directly after this implementation landed (red and blue hd0..hd3,
+including blue's shared-across-all-bays behavior matching what the
+decompilation predicted).
 
 One capture's own strace log (`hd0_blue_on.log`) initially showed `sh:
 strace: not found` with exit status 0 for every single command - not
