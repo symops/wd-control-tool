@@ -509,6 +509,32 @@ func TestRun_DryRun_EX4Display(t *testing.T) {
 	}
 }
 
+// buildDisplayAction's own "transliterated %q -> %q" debug-line
+// insertion (distinct from the frame itself, which is always sent
+// regardless of -D) had no CLI-level test at all - found via
+// `go tool cover` (round 17): transliterateCyrillic's own unit/fuzz
+// tests (translit_test.go) cover the conversion itself, but nothing
+// drove it through buildDisplayAction/run() to confirm -D actually
+// surfaces the substitution, or that plain ASCII text (no Cyrillic)
+// does NOT get this extra line at all (text == original).
+func TestRun_DryRun_EX4Display_CyrillicShowsTransliterationDebugLine(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-d", "Привет"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, `transliterated "Привет" -> "Privet"`) {
+		t.Errorf("out=%q, want the transliteration debug line", out)
+	}
+
+	code, out, _ = captureRun(t, []string{"-b", "ex4", "-n", "-D", "-d", "Hello"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if strings.Contains(out, "transliterated") {
+		t.Errorf("out=%q, plain ASCII text must not get a transliteration debug line", out)
+	}
+}
+
 // A display text that itself looks like a flag must still be taken
 // verbatim as the TEXT argument - this is the whole point of fixed
 // arity over a "-c ... take the rest" delimiter.
