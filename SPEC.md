@@ -93,10 +93,10 @@ against real hardware, not just statically).
 
 | Command | Bytes |
 |---|---|
-| `led_set_on` | `FA 03 06 01 00 00 FB` |
-| `led_set_off` | `FA 03 06 00 00 00 FB` |
-| `led_blink` | `FA 03 06 02 00 00 FB` |
-| `led_breath` | `FA 03 06 04 00 00 FB` |
+| `led_set_on` | `FA 03 06 01 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l on` on real hardware) |
+| `led_set_off` | `FA 03 06 00 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l off` on real hardware) |
+| `led_blink` | `FA 03 06 02 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l blinking` on real hardware) |
+| `led_breath` | `FA 03 06 04 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l breathing` on real hardware) |
 | `sys_ready` | `FA 03 01 00 00 00 FB` |
 | `sys_silent` | `FA 03 03 00 00 00 FB` |
 | `sys_shutdown` | `FA 03 03 01 00 00 FB` (confirmed genuine hard power cut, not cosmetic) |
