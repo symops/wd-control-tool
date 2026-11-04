@@ -1618,6 +1618,7 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 		{"-b", "ex2", "--serial", bad, "-f", "rpm"},                // same gap, buildEX2FanRPMAction's apply()
 		{"-b", "ex2", "--serial", bad, "-l", "power", "red", "on"}, // same gap, buildEX2PowerLEDAction's apply()
 		{"-b", "ex2u", "--serial", bad, "-t"},                      // same gap, buildTempAction's apply()
+		{"-b", "ex4", "--serial", bad, "-s", "on"},                 // same gap, buildSleepAction's apply()
 	}
 	for _, args := range cases {
 		code, _, errOut := captureRun(t, args)
