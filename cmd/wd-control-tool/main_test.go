@@ -630,6 +630,53 @@ func TestRun_RTCWrite_EX2_RealRunSendsCorrectFrame(t *testing.T) {
 	}
 }
 
+// buildRTCWriteAction's EX2 apply() has its own "w.Set(now) failed"
+// branch (distinct from mcu.Open's own error branch, already covered
+// by the bad-serial-path table) - found via `go tool cover`. EX2's
+// own SetDateAndTime retries its write-then-verify-read up to
+// pkg/mcu's own ex2RTCVerifyAttempts (3, unexported - hardcoded here)
+// times before giving up; never answering any of the 3 verify reads
+// exhausts them exactly like
+// TestEX2_SetDateAndTime_ExhaustsAttemptsOnRepeatedNoReply does one
+// layer down, just driven through the CLI's own real apply() this
+// time. EX4's equivalent branch is NOT similarly reachable: EX4's own
+// SetDateAndTime is pure fire-and-forget (no verify-read at all), so
+// its w.Set error can only come from a genuine write failure with no
+// clean, non-flaky way to inject one (see buildRTCReadAction's own
+// getReply-error branch, same reasoning) - left alone.
+func TestRun_RTCWrite_EX2_SetErrorPropagates(t *testing.T) {
+	const ex2RTCVerifyAttempts = 3                  // pkg/mcu's own constant, unexported
+	const ex2RTCVerifyReadTimeout = time.Second * 2 // same
+
+	fake := fakemcu.New(t)
+	a, code := buildRTCAction(board.EX2, fake.SlavePath, []string{"w"}, false)
+	if code != exitOK || a == nil {
+		t.Fatalf("buildRTCAction: code=%d", code)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- a.apply() }()
+
+	for attempt := 0; attempt < ex2RTCVerifyAttempts; attempt++ {
+		// Same timing lesson as TestEX2_SetDateAndTime_ExhaustsAttemptsOnRepeatedNoReply:
+		// only the FIRST attempt's write happens near-instantly - every
+		// later one only follows the PREVIOUS attempt's full verify-read
+		// timeout.
+		fake.ReadFrame(t, 13, ex2RTCVerifyReadTimeout+time.Second) // the write
+		fake.ReadFrame(t, 7, time.Second)                          // the verify read request
+		// Deliberately never write a reply.
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("apply() after every verify attempt got no reply: want error, got nil")
+		}
+	case <-time.After(ex2RTCVerifyAttempts * (ex2RTCVerifyReadTimeout + 2*time.Second)):
+		t.Fatal("apply() never returned")
+	}
+}
+
 // A successful "-r w" printed NOTHING at all on stdout - every other
 // rtc subcommand ("r": "RTC time = ..."; "s": "RTC time = ..." plus
 // "system time set to ..."; a decode/no-reply failure under any
@@ -1639,6 +1686,7 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 		{"-b", "ex2u", "--serial", bad, "-l", "on"}, // same gap, EX2U's led apply()
 		{"-b", "ex4", "--serial", bad, "-d", "hi"},
 		{"-b", "ex4", "--serial", bad, "-r", "w"},
+		{"-b", "ex2", "--serial", bad, "-r", "w"},                  // same gap, buildRTCWriteAction's EX2 apply() - found via go tool cover, only EX4's own mcu.Open error branch had a case here
 		{"-b", "ex2", "--serial", bad, "-f", "rpm"},                // same gap, buildEX2FanRPMAction's apply()
 		{"-b", "ex2", "--serial", bad, "-l", "power", "red", "on"}, // same gap, buildEX2PowerLEDAction's apply()
 		{"-b", "ex2u", "--serial", bad, "-t"},                      // same gap, buildTempAction's apply()
