@@ -325,9 +325,10 @@ where a reply's shape wasn't simply "my own request, answer in byte
 - **EX4**: MCU/UART only for **setting** speed (`FanControl`, levels
   0-4 = Stop/Low/Medium/High/Highest, a direct passthrough of
   `fan_control -f N`'s own argument - confirmed via the vendor
-  binary's own identity lookup table). **Reading** RPM is a
-  completely different mechanism, NOT the MCU at all - see "Fan RPM
-  read-back (EX4)" below.
+  binary's own identity lookup table, and confirmed working via
+  `wd-control-tool -b ex4 -f 0..4` directly on real EX4 hardware).
+  **Reading** RPM is a completely different mechanism, NOT the MCU at
+  all - see "Fan RPM read-back (EX4)" below.
 - **EX2**: **direct physical-register writes, no MCU involved at
   all** for setting speed (confirmed: EX2's `LIB_Set_Fan_Speed` never
   calls `up_send_ctl`/touches the UART). Registers (base `0xf1000000`,
