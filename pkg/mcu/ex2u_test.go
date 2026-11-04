@@ -325,7 +325,11 @@ func TestEX2U_LEDOnOff_ConcurrentCallsNeverInterleave(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2U(OpenFile(fake.Slave))
 
-	const rounds = 25 // no deliberate inter-byte delay (see ex2u.go), so this is cheap now
+	// 500, not the original 25: no deliberate inter-byte delay (see
+	// ex2u.go) keeps this cheap, and more rounds means more chances
+	// for the scheduler to interrupt mid-frame if the per-frame lock
+	// ever regressed to per-byte.
+	const rounds = 500
 	var wg sync.WaitGroup
 	callErrs := make(chan error, 2)
 	wg.Add(2)

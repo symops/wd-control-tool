@@ -43,7 +43,11 @@ func TestPort_SendBytes_ConcurrentFramesNeverInterleave(t *testing.T) {
 	fake := fakemcu.New(t)
 	p := OpenFile(fake.Slave)
 
-	const rounds = 25
+	// 500, not the original 25: an interleaving bug (if the per-frame
+	// lock ever regressed to per-byte) is a scheduling-timing hit, not
+	// a guaranteed reproduction on the first few frames - more rounds
+	// means more chances for the scheduler to interrupt mid-frame.
+	const rounds = 500
 	frameA := []byte{0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA}
 	frameB := []byte{0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB}
 

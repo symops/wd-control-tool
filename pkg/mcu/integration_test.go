@@ -347,7 +347,10 @@ func TestEX4_DeviceReadyAndFanLevel_ConcurrentCallsNeverInterleave(t *testing.T)
 	fake := fakemcu.New(t)
 	m := NewEX4(OpenFile(fake.Slave))
 
-	const rounds = 25
+	// 500, not the original 25: an interleaving bug (if the per-frame
+	// lock ever regressed to per-byte) is a scheduling-timing hit, not
+	// a guaranteed reproduction on the first few frames.
+	const rounds = 500
 	var wg sync.WaitGroup
 	callErrs := make(chan error, 2)
 	wg.Add(2)
