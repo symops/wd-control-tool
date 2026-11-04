@@ -2038,7 +2038,7 @@ func TestArityFor(t *testing.T) {
 // arityFor's default case (return 0) is unreachable-in-practice the
 // same way buildAction's mode panic and buildFanAction/
 // buildLEDAction's unsupported-board branches are - modeNameFor only
-// ever returns "fan"/"led"/"display"/"rtc"/"temp" (or ""), and arityFor is
+// ever returns "fan"/"led"/"display"/"rtc"/"temp"/"sleep" (or ""), and arityFor is
 // only ever called when that's non-empty. Closes the matching gap
 // for arityFor's own defensive branch, same as those three.
 func TestArityFor_UnknownModeReturnsZero(t *testing.T) {
@@ -2049,7 +2049,7 @@ func TestArityFor_UnknownModeReturnsZero(t *testing.T) {
 
 // buildAction's default case is an unreachable-in-practice panic:
 // parseArgs only ever calls it with a mode string that came from
-// modeNameFor, which only ever returns "fan"/"led"/"display"/"rtc"/"temp"
+// modeNameFor, which only ever returns "fan"/"led"/"display"/"rtc"/"temp"/"sleep"
 // (or ""), so every real caller already has a valid mode by
 // construction. "Unreachable in practice" isn't the same as
 // "unreachable in fact" - if a future edit to parseArgs/modeNameFor

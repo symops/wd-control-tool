@@ -38,7 +38,7 @@ func main() {
 // pendingAction is one <mode flag> + its own fixed-arity arguments,
 // in the order it appeared on the command line.
 type pendingAction struct {
-	mode string // "led", "fan", "rtc", "display", "temp"
+	mode string // "led", "fan", "rtc", "display", "temp", "sleep"
 	args []string
 }
 
@@ -97,8 +97,8 @@ func arityFor(mode string, b board.Board) int {
 }
 
 // parseArgs is a small hand-rolled parser, not the stdlib flag
-// package: each mode flag (-l/-f/-r/-d/-t) consumes a fixed number of
-// the following tokens as its own argument list (see arityFor), so
+// package: each mode flag (-l/-f/-r/-d/-t/-s) consumes a fixed number
+// of the following tokens as its own argument list (see arityFor), so
 // several actions can be chained in one invocation and no delimiter
 // flag is needed between a mode flag and its arguments, or between
 // one action and the next. -b/--board is looked up in a first pass
