@@ -559,13 +559,42 @@ only the confirmed ~400ms pause (`pkg/mcu/ex2.go`'s
 capture available only shows a clean two-frame success with pacing,
 never a confirmed multi-attempt success to copy exactly.
 
-**EX4's power LED mechanism is now unconfirmed, not confirmed as this
-spec previously claimed** - that claim rested on the same
-never-hardware-tested decompile that was just shown wrong for EX2.
-No EX4 hardware has been available to re-test this, so
-`wd-control-tool` still uses the `/dev/mem` GPIO path for EX4's power
-LED pending an EX4-specific capture - changing it without evidence
-would just be guessing in the other direction.
+**EX4's power LED mechanism is now CONFIRMED** (this spec previously
+flagged it unconfirmed, pending an EX4-specific capture - that
+capture has now happened). A live strace of the real `led power blue
+on` on real EX4 hardware confirmed it does NOT touch `/dev/ttyS1` at
+all - only `/dev/mem`, mmapping physical page `0xf1010000`. Decompiling
+the real `led` binary (not `libshare.so` - the LED-specific logic
+lives in `led` itself, which only calls `libshare.so`'s generic
+`LIB_Read_CPU_Register`/`LIB_Write_CPU_Register`) gave the exact
+mechanism, cross-checked across all 4 of `blue on`/`blue off`/
+`red on`/`red off`'s own decompiled handlers (internally consistent
+with each other, not just a single example):
+
+```c
+// e.g. "blue on" (power_blue_on, address 0xa3b4):
+clear(0x10100, redBit);  clear(0x10108, redBit);   // always clear the OTHER color first
+set  (0x10100, blueBit); clear(0x10108, blueBit);  // own color: set in reg1, clear in reg2
+// "blue blinking" (shared with several unrelated system states, e.g.
+// booting - same mechanism, not a coincidence):
+clear(0x10100, redBit);  clear(0x10108, redBit);
+set  (0x10100, blueBit); set  (0x10108, blueBit);  // own color SET in BOTH regs for blinking
+```
+
+This is **exactly** what `wd-control-tool`'s own `pkg/led.Plan` already
+computed for `Power` (addresses `0xF1010100`/`0xF1010108`, `redBit =
+1<<28`, `blueBit = 1<<29`, same clear-other/set-own/all-3-states
+logic) - the original "confirmed identical to EX2" claim this spec's
+EX2 section above shows was WRONG for EX2 turned out to be accidentally
+RIGHT for EX4, now confirmed independently rather than by continued
+inheritance from that same disproven claim. **Also confirmed on real
+EX4 hardware directly** (not just the decompile): `wd-control-tool -b
+ex4 -l power red on` lit the real red power LED. EX4's own `led -h`
+text only documents `power blue on/off/blinking` (no mention of red at
+all), but the dispatch code has a full, working `power red on/off/
+blinking` branch using the identical mechanism (just the opposite
+bit) - `wd-control-tool` was already right to expose red for EX4 too,
+this was just never confirmed until now.
 
 ## RTC (EX2/EX4)
 

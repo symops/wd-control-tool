@@ -12,11 +12,21 @@
 // EX2 + zone Power before ever calling into this package. Plan/Set
 // still compute the (now known-wrong-for-EX2) GPIO writes for that
 // combination if called directly - this package has no board
-// parameter to reject it itself. EX4's power LED mechanism remains
-// unconfirmed on real hardware either way (the original "confirmed
-// identical to EX2" claim rested on the same untested decompile that
-// was wrong for EX2) and is left as GPIO pending an EX4-specific
-// capture.
+// parameter to reject it itself.
+//
+// EX4's power LED mechanism IS this one - CONFIRMED, not just
+// inherited from the (wrong, for EX2) "identical to EX2" assumption
+// this comment used to repeat: a live strace of the real EX4 `led
+// power blue on` showed it never touches /dev/ttyS1, only /dev/mem
+// (page 0xf1010000); decompiling the real `led` binary (the LED
+// logic lives there, not in libshare.so) confirmed this package's
+// own powerDataOut/powerBlinkEn/redBit/blueBit and clear-other/
+// set-own logic exactly, independently, across all of blue/red
+// on/off/blinking; and `wd-control-tool -b ex4 -l power red on` lit
+// the real red LED on real hardware (EX4's own `led -h` text only
+// documents blue for power, but the real dispatch code has a full,
+// working red branch too - this package was already right to expose
+// it). See SPEC.md's "Power LED" for the full decompiled evidence.
 //
 // EX2U's LED (a single MCU-driven status LED, plus plain
 // kernel-LED-class hd0/hd1 bay LEDs that are out of scope for this
