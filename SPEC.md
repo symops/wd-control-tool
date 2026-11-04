@@ -198,6 +198,28 @@ are described in full; see "Full command tables" for every row):
   flag even if it looks like one), but `os.Args` bytes aren't
   guaranteed valid UTF-8, so a crafted argument (e.g. `$'\xfa\xfb'`,
   or a 250-byte string) really can hit this.
+
+  **Cyrillic text shows as garbage on the physical LCD - confirmed to
+  be the panel's own font ROM, not this protocol.** A real-hardware
+  report showed `wd-control-tool -b ex4 -d "Привет"` sending a
+  perfectly well-formed frame (`FA 04 01 00 0C D0 9F D1 80 ... FB` -
+  the raw UTF-8 bytes of "Привет", exactly as given) but displaying
+  unreadable characters on the LCD - and the vendor's OWN `sysname`
+  tool shows the identical garbling for the identical text, on the
+  identical hardware. This rules out a protocol/encoding bug on this
+  tool's side: there is no byte sequence this tool could send instead
+  that the LCD would render as a Cyrillic letter, because the LCD's
+  own character ROM (a typical HD44780-style fixed font table) was
+  never built with Cyrillic glyphs in it at all - a hardware
+  limitation of the panel itself, same as the vendor's own tool hits.
+  `wd-control-tool` works around this at the CLI layer
+  (`transliterateCyrillic` in `cmd/wd-control-tool/translit.go`),
+  converting each Russian Cyrillic letter to a readable Latin
+  transliteration (e.g. "Привет" -> "Privet") before building the
+  frame - `EX4DisplayFrame` itself is unchanged and knows nothing
+  about this; it's purely a CLI-level text transform, applied
+  automatically (no flag needed), with a `-D`/`--debug` line showing
+  the substitution whenever it changes the text.
 - **group 8 (`DeviceShutdown`/`MCUReset`/`DeviceShutdownByUPS`)**: `FA
   b4 b5 b6 b7 VALUE FB` - the final byte is a **runtime** value, not a
   table constant. `MCUReset` in particular requires a numeric argument

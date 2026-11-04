@@ -727,11 +727,24 @@ func buildDisplayAction(b board.Board, serialPath string, args []string) (*actio
 	if !b.HasDisplay() {
 		return unsupportedErr("board %v has no display", b)
 	}
-	text := args[0]
+	// EX4's LCD font ROM has no Cyrillic glyphs at all - confirmed:
+	// the vendor's own tool shows the same garbled output for the
+	// same text, on the same hardware, so this isn't a protocol
+	// encoding issue this tool could fix by sending different bytes.
+	// Transliterating to Latin first is the only way to show
+	// something readable for Cyrillic input - see transliterateCyrillic.
+	original := args[0]
+	text := transliterateCyrillic(original)
 	frame, ferr := mcu.EX4DisplayFrame(text)
+	debugLines := frameDebugLines(ferr, frame, serialPath, 19200)
+	if ferr == nil && text != original {
+		debugLines = append([]string{
+			fmt.Sprintf("transliterated %q -> %q (EX4's LCD has no Cyrillic glyphs)", original, text),
+		}, debugLines...)
+	}
 	return &action{
 		describe:   fmt.Sprintf("send display text %q to EX4 MCU (%s)", text, serialPath),
-		debugLines: frameDebugLines(ferr, frame, serialPath, 19200),
+		debugLines: debugLines,
 		planErr:    ferr,
 		apply: func() error {
 			p, err := mcu.Open(serialPath, 19200)
