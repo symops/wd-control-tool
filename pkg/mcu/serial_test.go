@@ -213,6 +213,31 @@ func TestPort_FlushInput_DoesNotErrorAndDrainsPendingBytes(t *testing.T) {
 	}
 }
 
+// mcuTrace/traceEvent (diagnostic-only, see their own doc comment)
+// are gated behind an env var read once at package-init time, so a
+// normal `go test` run never exercises their body - found via
+// `go tool cover`. mcuTrace is a plain package var, not a const, so
+// a test in this same package can flip it directly for its own
+// duration and restore it afterward, without needing a separate
+// WD_MCU_TRACE=1 process invocation. Confirms both call sites that
+// matter (traceEvent itself, and flushInput's own FIONREAD+traceEvent
+// block) run without panicking or erroring when tracing is on - not
+// asserting on the actual stderr text, which is debug output, not a
+// documented contract.
+func TestFlushInput_TraceEnabled_DoesNotPanicOrError(t *testing.T) {
+	old := mcuTrace
+	mcuTrace = true
+	defer func() { mcuTrace = old }()
+
+	traceEvent("test event %d", 42)
+
+	fake := fakemcu.New(t)
+	p := OpenFile(fake.Slave)
+	if err := p.flushInput(); err != nil {
+		t.Fatalf("flushInput with tracing enabled: %v", err)
+	}
+}
+
 // Regression test for the exact real-hardware bug report this
 // project got: a real EX2 RDateAndTime reply (13 bytes) was caught
 // truncated to 8 bytes by a single Read() call that returned before
