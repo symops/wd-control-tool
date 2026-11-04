@@ -585,7 +585,9 @@ silently doing nothing, since the vendor's own code has no such branch
 either. **Confirmed working on real EX4 hardware** by the user
 directly after this implementation landed (red and blue hd0..hd3,
 including blue's shared-across-all-bays behavior matching what the
-decompilation predicted).
+decompilation predicted, and red's `blinking` state specifically -
+the asymmetric "reg2 only" write confirmed above actually blinks the
+real LED, not just a register write with no visible effect).
 
 One capture's own strace log (`hd0_blue_on.log`) initially showed `sh:
 strace: not found` with exit status 0 for every single command - not
