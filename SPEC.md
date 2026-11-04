@@ -300,10 +300,12 @@ where a reply's shape wasn't simply "my own request, answer in byte
 
 - **EX2U**: MCU/UART only, 5 duty-cycle steps (0/25/50/75/100),
   hardware-confirmed.
-- **EX4**: MCU/UART only (`FanControl`, levels 0-4 = Stop/Low/Medium/
-  High/Highest, a direct passthrough of `fan_control -f N`'s own
-  argument - confirmed via the vendor binary's own identity lookup
-  table).
+- **EX4**: MCU/UART only for **setting** speed (`FanControl`, levels
+  0-4 = Stop/Low/Medium/High/Highest, a direct passthrough of
+  `fan_control -f N`'s own argument - confirmed via the vendor
+  binary's own identity lookup table). **Reading** RPM is a
+  completely different mechanism, NOT the MCU at all - see "Fan RPM
+  read-back (EX4)" below.
 - **EX2**: **direct physical-register writes, no MCU involved at
   all** for setting speed (confirmed: EX2's `LIB_Set_Fan_Speed` never
   calls `up_send_ctl`/touches the UART). Registers (base `0xf1000000`,
@@ -364,6 +366,48 @@ exactly through `period = round(300000/rpm)`, `300000/period`
 truncated - would be an extraordinary coincidence otherwise). See
 `pkg/mcu/ex2.go`'s `EX2DecodeFanRPM`; `wd-control-tool -b ex2 -f rpm`
 exposes this.
+
+### Fan RPM read-back (EX4 - CONFIRMED, direct register, not the MCU)
+
+A live strace of the real `fan_control -g 4` on real EX4 hardware
+showed it never sends anything resembling a read request over
+`/dev/ttyS1` at all - the only UART traffic during the whole command
+is a single `FA 04 83 00 07 "1980rpm" FB` write, which is EX4's
+`SysName`-style text-display frame (`FA b4 b5 b6 LEN <text> FB`,
+`LEN`=`0x07`="1980rpm", 7 ASCII bytes) writing the ALREADY-KNOWN
+answer to the front-panel LCD as a courtesy - not a request for it.
+The real value comes from repeatedly `open()`+`mmap()`+`close()`-ing
+`/dev/mem` (confirmed in the same strace: dozens of `openat("/dev/
+mem", ...)`+`mmap2(NULL, 4096, ..., 0xf1010000)`+`close()` cycles,
+same page-at-a-time pattern `pkg/regio` already uses for EX2's fan/
+both boards' LEDs), not the legacy MCU protocol.
+
+Decompiling the real `libshare.so` (Ghidra, confirmed against the
+same `0xf1010000` page the strace showed) gives the exact mechanism:
+
+```c
+getFanStatus()  = (LIB_Read_CPU_Register(0x10150) >> 7) & 1
+getFanPluse()   = count of 0/1 transitions of that bit, polled as
+                  fast as possible for ~1 real second (a tight
+                  busy-loop, each iteration re-opening/mmapping
+                  /dev/mem) - exactly one edge over the whole window
+                  is treated as 0 (can't represent a full tachometer
+                  cycle)
+getFanrpm()     = pulses < 2 ? 0 : pulses * 15
+```
+
+`LIB_Read_CPU_Register(0x10150)` reads physical address
+`0xf1000000 + 0x10150 = 0xf1010150` - confirmed matching the
+`0xf1010000`-page mmap the strace showed (`0x10150`'s low 12 bits,
+`0x150`, is the in-page offset). The `*15` constant matches the
+standard 2-pulse-per-revolution tachometer convention (4 edges/rev:
+`RPM = edges * 60 / 4 = edges * 15`) and was cross-validated against
+3 real captures, not just the decompiled formula alone: `fan rpm` =
+2010/1980/2430 all divide evenly by 15 (134/132/162 edges).
+`wd-control-tool -b ex4 -f rpm` reimplements this exactly (clean-room,
+no vendor code linked) in `pkg/fan/ex4.go`'s `EX4ReadFanPulses`/
+`EX4DecodeFanRPM`, via `pkg/regio` (not a new mechanism - the same
+one EX2's fan/both boards' LEDs already use).
 
 Both EX2 and EX4 read other sensors too (`ThermalGet`/
 `GetThemister`), but **this tool cannot parse those replies** (see

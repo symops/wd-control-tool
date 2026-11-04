@@ -17,9 +17,12 @@ config daemon, no message-queue relay, no `/tmp` file polling.
 See `SPEC.md` for the full, reverse-engineered hardware reference
 this implementation follows - including what is still unconfirmed
 or unimplemented. Most MCU commands remain fire-and-forget (no reply
-ever parsed), but three reads are now confirmed and implemented:
+ever parsed), but three MCU reads are now confirmed and implemented:
 EX2U's temperature (`-t`), EX2's fan RPM (`-f rpm`) and EX2's RTC
 (`-r r`/`-r s`) - see SPEC.md, "Request/response and acknowledgement".
+EX4 also has its own `-f rpm`, but it's not an MCU command at all - a
+direct `/dev/mem` register read (confirmed by decompiling the real
+`libshare.so`), see SPEC.md's "Fan RPM read-back (EX4)".
 
 ## Download
 
@@ -85,7 +88,7 @@ fails stops the rest - later actions in the same command never run.
 | Flag | Boards | Arguments | Notes |
 |---|---|---|---|
 | `-f`, `--fan` | all | `LEVEL` | Board-native units, NOT a common 0-100 scale: EX2U 0/25/50/75/100 (duty %), EX4 0-4 (Stop..Highest), EX2 0-6 (Stop + 6 fixed RPM steps). See SPEC.md, "Fan control". |
-| `-f`, `--fan` | ex2 | `rpm` | Special argument value (not a level): reads back and prints the current fan RPM (`fan rpm = N`, matching the vendor `fan_control -g`'s own wording) - hardware-confirmed, see SPEC.md's "Fan status read-back". |
+| `-f`, `--fan` | ex2, ex4 | `rpm` | Special argument value (not a level): reads back and prints the current fan RPM (`fan rpm = N`, matching the vendor `fan_control -g`'s own wording) - hardware-confirmed on both boards, see SPEC.md's "Fan status read-back" (EX2, via the MCU) and "Fan RPM read-back (EX4)" (EX4, a direct `/dev/mem` register read instead - decompiled from the real `libshare.so`, not the MCU). |
 | `-l`, `--led` | ex2, ex4 | `ZONE COLOR STATE` | zones: `power`, `hd0`, `hd1` (+`hd2`,`hd3` on EX4); colors: `red`, `blue`; states: `on`, `off`, `blinking` (or `blink`). `power` on EX2 is MCU-driven, not `/dev/mem` (hardware-confirmed - see SPEC.md). `hd0`/`hd1`'s `on`/`off` are hardware-confirmed (a real register-page capture); `blinking` on HD-bay and `hd2`/`hd3` (EX4-only, no hardware available to test) have no confirmed register behavior and are reported as an error rather than guessed, same as `blinking` on EX2's power LED. |
 | `-l`, `--led` | ex2u | `STATE` | states: `on`, `off`, `blinking` (or `blink`), `breathing` (or `breathe`) - EX2U's single status LED, not a zone/color scheme. |
 | `-d`, `--display` | ex4 | `TEXT` | Writes to the front-panel LCD. Not truncated or paginated at the LCD's own 16-char width - see SPEC.md. Taken verbatim, even if it looks like a flag (e.g. starts with `-`). Max 255 bytes (the wire format's own LEN field is one byte wide), and may not contain a literal 0xFA/0xFB byte or be exactly 250/251 bytes long (the wire protocol's own start/end markers - see SPEC.md); any of these is rejected with an error, not silently sent. |

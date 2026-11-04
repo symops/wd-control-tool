@@ -1324,15 +1324,16 @@ func TestRun_RealRun_EX2FanRPM_DecodesRealCapturedReply(t *testing.T) {
 	}
 }
 
-func TestRun_EX2FanRPM_UnsupportedOnOtherBoards(t *testing.T) {
-	for _, b := range []string{"ex4", "ex2u"} {
-		code, _, errOut := captureRun(t, []string{"-b", b, "-f", "rpm"})
-		if code != exitUnsupported {
-			t.Errorf("board %s: code=%d, want %d; err=%q", b, code, exitUnsupported, errOut)
-		}
-		if !strings.Contains(errOut, "fan rpm read is not supported") {
-			t.Errorf("board %s: errOut=%q", b, errOut)
-		}
+// EX2U-only now - EX4 gained its own "-f rpm" (via /dev/mem, not the
+// MCU) once its real register/formula were confirmed by decompiling
+// libshare.so - see buildEX4FanRPMAction.
+func TestRun_FanRPM_UnsupportedOnEX2U(t *testing.T) {
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "-f", "rpm"})
+	if code != exitUnsupported {
+		t.Errorf("code=%d, want %d; err=%q", code, exitUnsupported, errOut)
+	}
+	if !strings.Contains(errOut, "fan rpm read is not supported") {
+		t.Errorf("errOut=%q", errOut)
 	}
 }
 
@@ -1346,6 +1347,21 @@ func TestRun_DryRun_EX2FanRPM(t *testing.T) {
 	}
 	if !strings.Contains(out, "would request fan RPM") {
 		t.Errorf("out=%q, missing the dry-run description line", out)
+	}
+}
+
+// EX4's own "-f rpm" never opens /dev/ttyS1 at all (not an MCU
+// command - see buildEX4FanRPMAction), so unlike EX2FanRPM's dry-run
+// test above there's no frame to assert on; this just confirms the
+// describe line mentions the real register/bit this reads, matching
+// what -D would otherwise promise to show.
+func TestRun_DryRun_EX4FanRPM(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex4", "-n", "-D", "-f", "rpm"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "0xf1010150") || !strings.Contains(out, "bit 7") {
+		t.Errorf("out=%q, want the tachometer register address and bit", out)
 	}
 }
 

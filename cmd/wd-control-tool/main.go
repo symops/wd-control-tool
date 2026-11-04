@@ -424,10 +424,14 @@ func buildAction(b board.Board, mode, serialPath string, args []string, debug bo
 		// current fan RPM instead of setting a speed. EX2-only - see
 		// buildEX2FanRPMAction.
 		if args[0] == "rpm" {
-			if b != board.EX2 {
+			switch b {
+			case board.EX2:
+				return buildEX2FanRPMAction(serialPath, debug)
+			case board.EX4:
+				return buildEX4FanRPMAction()
+			default:
 				return unsupportedErr("fan rpm read is not supported on board %v", b)
 			}
-			return buildEX2FanRPMAction(serialPath, debug)
 		}
 		return buildFanAction(b, serialPath, args)
 	case "led":
@@ -546,6 +550,33 @@ func buildEX2FanRPMAction(serialPath string, debug bool) (*action, int) {
 				return nil
 			}
 			fmt.Printf("fan rpm = %d\n", rpm)
+			return nil
+		},
+	}, exitOK
+}
+
+// buildEX4FanRPMAction samples EX4's fan tachometer register directly
+// via /dev/mem, matching the vendor fan_control -g's own "fan rpm =
+// N" wording - see fan.EX4ReadFanPulses/fan.EX4DecodeFanRPM's own doc
+// comments for how this was confirmed (decompiling the real
+// libshare.so, not guessed): unlike EX2, EX4's RPM read-back is not
+// an MCU/UART command at all, so this takes no serialPath and never
+// opens /dev/ttyS1.
+func buildEX4FanRPMAction() (*action, int) {
+	return &action{
+		describe: fmt.Sprintf("sample EX4 fan tachometer (/dev/mem 0x%x bit %d) for %v",
+			fan.EX4FanTachAddr, fan.EX4FanTachBit, fan.EX4FanTachSampleWindow),
+		apply: func() error {
+			m, err := regio.Open()
+			if err != nil {
+				return err
+			}
+			defer m.Close()
+			pulses, err := fan.EX4ReadFanPulses(m, fan.EX4FanTachSampleWindow)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("fan rpm = %d\n", fan.EX4DecodeFanRPM(pulses))
 			return nil
 		},
 	}, exitOK

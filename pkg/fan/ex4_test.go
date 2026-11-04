@@ -7,6 +7,7 @@ import (
 
 	"github.com/symops/wd-control-tool/pkg/mcu"
 	"github.com/symops/wd-control-tool/test/fakemcu"
+	"github.com/symops/wd-control-tool/test/fakeregio"
 )
 
 func TestEX4_Set_OverPTY(t *testing.T) {
@@ -54,5 +55,93 @@ func TestEX4_Set_AllLevels(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("level %d: wire bytes = % X, want % X", level, got, want)
 		}
+	}
+}
+
+// Mirrors the real libshare.so's getFanPluse exactly (confirmed via
+// decompilation - see ex4.go's own doc comment), including its
+// asymmetric initial-state seed (1, not "unknown") and its
+// single-edge noise rejection.
+func TestEx4CountFanEdges(t *testing.T) {
+	cases := []struct {
+		name    string
+		samples []int
+		want    int
+	}{
+		{"no samples", nil, 0},
+		{"steady at 1 (matches the initial seed, no edges)", []int{1, 1, 1, 1}, 0},
+		{"steady at 0 (one edge from the seed, rejected as noise)", []int{0, 0, 0, 0}, 0},
+		{"single real toggle (still just one edge total, rejected)", []int{1, 1, 0, 0}, 0},
+		{"one full cycle: 1->0->1 is two edges", []int{1, 0, 1}, 2},
+		{"several full cycles", []int{1, 0, 1, 0, 1, 0, 1}, 6},
+		{"starts at 0: the seed->0 transition counts too", []int{0, 1, 0, 1}, 4},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ex4CountFanEdges(c.samples); got != c.want {
+				t.Errorf("ex4CountFanEdges(%v) = %d, want %d", c.samples, got, c.want)
+			}
+		})
+	}
+}
+
+// Mirrors the real libshare.so's getFanrpm exactly: edges < 2 -> 0,
+// else edges*15 - cross-validated against 3 real EX4 captures (fan
+// rpm = 2010, 1980, 2430 all divide evenly by 15: 134, 132, 162
+// edges respectively), not just the decompiled formula alone.
+func TestEX4DecodeFanRPM(t *testing.T) {
+	cases := []struct{ edges, want int }{
+		{0, 0},
+		{1, 0},
+		{2, 30},
+		{134, 2010},
+		{132, 1980},
+		{162, 2430},
+	}
+	for _, c := range cases {
+		if got := EX4DecodeFanRPM(c.edges); got != c.want {
+			t.Errorf("EX4DecodeFanRPM(%d) = %d, want %d", c.edges, got, c.want)
+		}
+	}
+}
+
+// Integration-level: exercises the real regio.Mem.ReadReg32 path (via
+// fakeregio) end to end, concurrently toggling the tachometer bit a
+// known number of times slowly enough that EX4ReadFanPulses's own
+// polling (much faster, even through fakeregio's per-call mmap/
+// munmap) reliably samples every state - confirming the real wiring
+// (register address, bit position, edge counting) works together,
+// not just ex4CountFanEdges's own pure-function cases above.
+func TestEX4ReadFanPulses_OverFakeRegio(t *testing.T) {
+	mem := fakeregio.New(t)
+
+	const toggles = 10
+	const toggleInterval = 5 * time.Millisecond
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		bit := uint32(0)
+		for i := 0; i < toggles; i++ {
+			if err := mem.WriteReg32(EX4FanTachAddr, bit<<EX4FanTachBit); err != nil {
+				t.Errorf("WriteReg32: %v", err)
+				return
+			}
+			bit ^= 1
+			time.Sleep(toggleInterval)
+		}
+	}()
+
+	edges, err := EX4ReadFanPulses(mem, toggles*toggleInterval+20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("EX4ReadFanPulses: %v", err)
+	}
+	<-done
+
+	// toggles writes starting from 0 (the seed) means toggles edges
+	// total (0->1->0->...), not off by one - but real-time
+	// scheduling could plausibly miss the very first or last sample,
+	// so this allows +/-1 rather than asserting toggles exactly.
+	if edges < toggles-1 || edges > toggles+1 {
+		t.Errorf("edges = %d, want within 1 of %d", edges, toggles)
 	}
 }
