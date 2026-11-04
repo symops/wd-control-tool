@@ -276,6 +276,61 @@ func TestEX4Reader_Read_IOErrorPropagates(t *testing.T) {
 	}
 }
 
+// Mirrors TestEX2Reader_Read_DecodeFailurePropagates - found missing
+// via `go tool cover` (EX4Reader.Read's decode-error branch had no
+// test, unlike its EX2 sibling).
+func TestEX4Reader_Read_DecodeFailurePropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	r := EX4Reader{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
+
+	done := make(chan struct {
+		ok  bool
+		err error
+	}, 1)
+	go func() {
+		_, ok, err := r.Read(3 * time.Second)
+		done <- struct {
+			ok  bool
+			err error
+		}{ok, err}
+	}()
+
+	fake.ReadFrame(t, 7, 3*time.Second) // drain the RDateAndTime request
+	// Same genuinely-unrecoverable headless tail as
+	// mcu.TestEX4DecodeDateAndTime_RejectsShortOrMalformedReply's
+	// siblings.
+	unrecoverable := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+	if _, err := fake.Master.Write(unrecoverable); err != nil {
+		t.Fatalf("write fake reply: %v", err)
+	}
+
+	r2 := <-done
+	if r2.err == nil {
+		t.Fatalf("Read with an undecodable reply: want error, got nil (ok=%v)", r2.ok)
+	}
+	if r2.ok {
+		t.Error("Read with an undecodable reply: ok=true, want false")
+	}
+}
+
+// Mirrors TestEX2Reader_Read_NoReplyWithinTimeout - same gap, found
+// the same way.
+func TestEX4Reader_Read_NoReplyWithinTimeout(t *testing.T) {
+	fake := fakemcu.New(t)
+	r := EX4Reader{MCU: mcu.NewEX4(mcu.OpenFile(fake.Slave))}
+
+	ok, err := func() (bool, error) {
+		_, ok, err := r.Read(10 * time.Millisecond)
+		return ok, err
+	}()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if ok {
+		t.Error("Read: ok=true, want false (nothing was ever written to the fake MCU)")
+	}
+}
+
 func TestEX2Reader_Read_DecodeFailurePropagates(t *testing.T) {
 	fake := fakemcu.New(t)
 	r := EX2Reader{MCU: mcu.NewEX2(mcu.OpenFile(fake.Slave))}
