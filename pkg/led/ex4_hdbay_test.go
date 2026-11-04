@@ -181,3 +181,32 @@ func TestEX4HDBaySet_Red_PerBayIndependence(t *testing.T) {
 		t.Errorf("reg1 after hd0 red off = 0x%x, want 0x%x (hd1's bit must survive)", got, uint32(1<<14))
 	}
 }
+
+// Same reasoning as pkg/led's own FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters:
+// Zone/Color/State are plain int-based types, so EX4HDBayPlan can be
+// called with any int value cast to them. Must never panic for any
+// combination, and every register address it ever writes to must be
+// one of the 3 known EX4 HD-bay registers.
+func FuzzEX4HDBayPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
+	f.Add(int(HD0), int(Red), int(On))
+	f.Add(int(HD3), int(Blue), int(Blinking))
+	f.Add(int(Power), int(Red), int(On)) // not a valid zone for this function - must error, not panic
+	f.Add(99, 99, 99)
+	f.Add(-1, -1, -1)
+
+	knownAddrs := map[int64]bool{
+		ex4HDBayReg1: true, ex4HDBayReg2: true, ex4HDBayBlueReg: true,
+	}
+
+	f.Fuzz(func(t *testing.T, zone, color, state int) {
+		ws, err := EX4HDBayPlan(Zone(zone), Color(color), State(state))
+		if err != nil {
+			return
+		}
+		for _, w := range ws {
+			if !knownAddrs[w.Addr] {
+				t.Fatalf("EX4HDBayPlan(%d,%d,%d) wrote to unknown address 0x%x", zone, color, state, w.Addr)
+			}
+		}
+	})
+}
