@@ -145,3 +145,17 @@ func TestEX4ReadFanPulses_OverFakeRegio(t *testing.T) {
 		t.Errorf("edges = %d, want within 1 of %d", edges, toggles)
 	}
 }
+
+// EX4ReadFanPulses' own ReadReg32-error branch had no coverage -
+// found via `go tool cover`. Closing mem out from under it first
+// makes the very first ReadReg32 call fail (mmap against a closed
+// fd), which must propagate immediately rather than being swallowed
+// into a 0-edge result.
+func TestEX4ReadFanPulses_ReadErrorPropagates(t *testing.T) {
+	mem := fakeregio.New(t)
+	mem.Close()
+
+	if _, err := EX4ReadFanPulses(mem, time.Second); err == nil {
+		t.Error("EX4ReadFanPulses on a closed Mem: want error, got nil")
+	}
+}

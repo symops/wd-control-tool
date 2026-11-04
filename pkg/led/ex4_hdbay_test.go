@@ -210,3 +210,13 @@ func FuzzEX4HDBayPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
 		}
 	})
 }
+
+// Mirrors TestSet_RejectsBadInput - found missing via `go tool cover`
+// (EX4HDBaySet's own error-from-Plan branch had no test at all,
+// unlike every other Set-style wrapper in this package).
+func TestEX4HDBaySet_RejectsBadInput(t *testing.T) {
+	mem := fakeregio.New(t)
+	if err := EX4HDBaySet(mem, HD0, Color(99), On); err == nil {
+		t.Error("EX4HDBaySet with invalid color: want error, got nil")
+	}
+}
