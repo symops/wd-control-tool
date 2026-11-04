@@ -1717,6 +1717,8 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 		{"-b", "ex2", "--serial", bad, "-l", "power", "red", "on"}, // same gap, buildEX2PowerLEDAction's apply()
 		{"-b", "ex2u", "--serial", bad, "-t"},                      // same gap, buildTempAction's apply()
 		{"-b", "ex4", "--serial", bad, "-s", "on"},                 // same gap, buildSleepAction's apply()
+		{"-b", "ex2", "--serial", bad, "-r", "r"},                  // same gap, buildRTCReadAction's apply() - found via go tool cover (round 18): only "-r w" had any case here, "-r r"/"-r s" share one builder for BOTH boards and had none at all
+		{"-b", "ex4", "--serial", bad, "-r", "s"},                  // same gap, the other board/subcommand combination
 	}
 	for _, args := range cases {
 		code, _, errOut := captureRun(t, args)
