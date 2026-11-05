@@ -946,6 +946,28 @@ may need a reboot to undo, not just a revert of the write that
 caused it - plan test sessions accordingly, and don't assume "I
 reverted the code" is the same as "the hardware is back to normal."
 
+A nineteenth finding, this time about `make fuzz` itself rather than
+the product: `go test -fuzz` defaults to one fuzzing worker per
+`GOMAXPROCS` (= every CPU), which is fine on a dedicated machine but
+not when `make fuzz` runs as part of a long background test loop
+alongside other work on a shared box. This caused a real, confusing
+false alarm: a `make fuzz FUZZTIME=2m` run (started correctly, no
+duplicate process this time) hit `--- FAIL: FuzzRun_NeverPanics:
+context deadline exceeded` - looking exactly like a real regression
+at first - which turned out to be ordinary CPU starvation from
+something else running at the same time, not a bug in the code under
+test. Fixed by capping the `fuzz` target's own `GOMAXPROCS` to 25% of
+`nproc` (`FUZZCPU` in the `Makefile`, minimum 1) rather than
+`-parallel`: `-parallel` only bounds the fuzzing engine's own worker
+count, while `GOMAXPROCS` also caps every other thread the Go runtime
+spins up in that same process (goroutine scheduling, GC) - each fuzz
+target here is a full `go test` binary, not just the fuzz loop by
+itself. Confirmed via a 3-second `GOMAXPROCS=8` run on this 32-core
+machine printing "now fuzzing with 8 workers" (down from the default
+32). This doesn't change `fuzz`'s normal usage (`make fuzz` or `make
+fuzz FUZZTIME=5m` work exactly as before) - only how many CPUs it's
+willing to use while doing it.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

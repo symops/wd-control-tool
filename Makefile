@@ -81,15 +81,29 @@ test-race:
 # their small seed corpus - this is the opt-in, exploratory version.
 FUZZTIME := 30s
 
+# go test -fuzz defaults to one fuzzing worker per GOMAXPROCS (= all
+# CPUs) - fine on a dedicated machine, but this project's own fuzz
+# rounds run as a long background loop alongside other work on a
+# shared box, where that starves everything else and (confirmed once
+# already - see BUILDING.md) can even make an unrelated fuzz target
+# spuriously fail with "context deadline exceeded" under contention.
+# Capped at 25% of nproc (minimum 1) via GOMAXPROCS, not -parallel:
+# -parallel only bounds the *fuzzing engine's* worker count, while
+# GOMAXPROCS also caps how many OS threads the Go runtime itself uses
+# for everything else in the process (goroutine scheduling, GC),
+# which matters since each fuzz target here is a real go test binary,
+# not just the fuzzing loop.
+FUZZCPU := $(shell n=$$(nproc); echo $$(( (n + 3) / 4 )))
+
 fuzz:
-	go test ./pkg/board/ -run=NONE -fuzz=FuzzParse_NeverPanicsAndRoundTrips -fuzztime=$(FUZZTIME)
-	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
-	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
-	go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX2ULEDFrame_NeverPanics -fuzztime=$(FUZZTIME)
-	go test ./pkg/led/ -run=NONE -fuzz=FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
-	go test ./pkg/fan/ -run=NONE -fuzz=FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
-	go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzParseArgs_NeverPanics -fuzztime=$(FUZZTIME)
-	go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzRun_NeverPanics -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./pkg/board/ -run=NONE -fuzz=FuzzParse_NeverPanicsAndRoundTrips -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DateTimeFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX4DisplayFrame_NeverEmitsMarkerBytesInPayload -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./pkg/mcu/ -run=NONE -fuzz=FuzzEX2ULEDFrame_NeverPanics -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./pkg/led/ -run=NONE -fuzz=FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./pkg/fan/ -run=NONE -fuzz=FuzzEx2FanPlan_NeverPanicsAndOnlyWritesKnownRegisters -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzParseArgs_NeverPanics -fuzztime=$(FUZZTIME)
+	GOMAXPROCS=$(FUZZCPU) go test ./cmd/wd-control-tool/ -run=NONE -fuzz=FuzzRun_NeverPanics -fuzztime=$(FUZZTIME)
 
 clean:
 	rm -f $(BINARY) $(BINARY)-armv7 $(BINARY)-armv5
