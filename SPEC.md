@@ -745,6 +745,14 @@ this was just never confirmed until now.
 
 ## RTC (EX2/EX4)
 
+EX2U is deliberately out of scope here, not an oversight: EX2U's own
+RTC is exposed to the kernel directly as `/dev/rtc0` (a normal Linux
+RTC driver), so the OS's own `hwclock` already handles it - there is
+no separate MCU-protocol RTC path on EX2U the way there is on EX2/EX4
+(whose RTC is NOT exposed to the kernel, only reachable through the
+legacy MCU protocol below, which is why they need `wd-control-tool`'s
+own `-r` support at all).
+
 Rides the legacy MCU protocol's `RDateAndTime`/`WDateAndTime`
 commands - see "EX2/EX4 protocol" above. The vendor `rtc` tool itself
 has **no direct `/dev/rtc0` ioctl path** despite that string appearing
