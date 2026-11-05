@@ -56,10 +56,17 @@ var (
 // is a bitmask: one bit selects the color, a separate bit means "on".
 // Confirmed via a live strace capturing all 4 combinations of
 // color x on/off on real EX2 hardware - see EX2PowerLEDFrames.
+// ex2PWRLedBlinkFlag (0x20, a THIRD, separate flag bit from the on
+// flag - not on|something-else) was confirmed the same way, from a
+// live strace of `led power red/blink` and `led power blue/blink`:
+//
+//	red blinking:  FA 26 00 01 00 01 FB, FA 26 00 24 00 01 FB (0x24 = redBit|0x20)
+//	blue blinking: FA 26 00 04 00 01 FB, FA 26 00 21 00 01 FB (0x21 = blueBit|0x20)
 const (
-	ex2PWRLedBlueBit = 0x01
-	ex2PWRLedRedBit  = 0x04
-	ex2PWRLedOnFlag  = 0x10
+	ex2PWRLedBlueBit   = 0x01
+	ex2PWRLedRedBit    = 0x04
+	ex2PWRLedOnFlag    = 0x10
+	ex2PWRLedBlinkFlag = 0x20
 )
 
 // EX2 is a legacy-protocol client bound to EX2's command table.
@@ -306,24 +313,28 @@ func (m *EX2) SetDateAndTime(year, mon, dom, dow, hour, min, sec int) error {
 
 // EX2PowerLEDFrames builds the two NewPWRLed frames the real `led`
 // tool sends for one `led power COLOR STATE` call: first clears the
-// OTHER color (value = otherColorBit, no on-flag - itself a genuine
+// OTHER color (value = otherColorBit, no flag - itself a genuine
 // "turn that color off"), then sets THIS color to the requested
-// state (value = colorBit, OR'd with the on-flag if turning on).
+// state (value = colorBit, OR'd with the matching state flag - see
+// ex2PWRLedOnFlag/ex2PWRLedBlinkFlag's own doc comment for both
+// confirmed byte-for-byte - off has no flag at all).
 //
 // Hardware-confirmed by a live strace of the real vendor `led` tool
-// on real EX2 hardware for all 4 combinations (red/blue x on/off),
-// run after the previously-documented /dev/mem GPIO scheme was found
-// to do nothing at all for this zone:
+// on real EX2 hardware for all 6 combinations (red/blue x off/on/
+// blinking), run after the previously-documented /dev/mem GPIO
+// scheme was found to do nothing at all for this zone:
 //
-//	blue on:  FA 26 00 04 00 01 FB, FA 26 00 11 00 01 FB
-//	blue off: FA 26 00 04 00 01 FB, FA 26 00 01 00 01 FB
-//	red on:   FA 26 00 01 00 01 FB, FA 26 00 14 00 01 FB
-//	red off:  FA 26 00 01 00 01 FB, FA 26 00 04 00 01 FB
+//	blue off:      FA 26 00 04 00 01 FB, FA 26 00 01 00 01 FB
+//	blue on:       FA 26 00 04 00 01 FB, FA 26 00 11 00 01 FB
+//	blue blinking: FA 26 00 04 00 01 FB, FA 26 00 21 00 01 FB
+//	red off:       FA 26 00 01 00 01 FB, FA 26 00 04 00 01 FB
+//	red on:        FA 26 00 01 00 01 FB, FA 26 00 14 00 01 FB
+//	red blinking:  FA 26 00 01 00 01 FB, FA 26 00 24 00 01 FB
 //
-// Only on/off were captured - "blinking" has no confirmed frame (see
-// SPEC.md's "EX2/EX4 protocol", NewPWRLed, and this project's own
-// house rule against guessing one).
-func EX2PowerLEDFrames(color string, on bool) ([2][]byte, error) {
+// state must be "off", "on" or "blinking" - matching led.State's own
+// String() spelling exactly, so callers can pass stateVal.String()
+// directly.
+func EX2PowerLEDFrames(color, state string) ([2][]byte, error) {
 	var colorBit, otherBit byte
 	switch color {
 	case "blue":
@@ -334,8 +345,14 @@ func EX2PowerLEDFrames(color string, on bool) ([2][]byte, error) {
 		return [2][]byte{}, fmt.Errorf("mcu: unknown EX2 power LED color %q", color)
 	}
 	value := colorBit
-	if on {
+	switch state {
+	case "off":
+	case "on":
 		value |= ex2PWRLedOnFlag
+	case "blinking":
+		value |= ex2PWRLedBlinkFlag
+	default:
+		return [2][]byte{}, fmt.Errorf("mcu: unknown EX2 power LED state %q", state)
 	}
 	return [2][]byte{
 		buildValueFrame(ex2NewPWRLed, otherBit),
@@ -361,8 +378,8 @@ const ex2PowerLEDInterFrameDelay = 400 * time.Millisecond
 // PowerLED sends EX2PowerLEDFrames's two frames, pausing
 // ex2PowerLEDInterFrameDelay between them - see that constant's doc
 // comment for why the pause is load-bearing, not cosmetic.
-func (m *EX2) PowerLED(color string, on bool) error {
-	frames, err := EX2PowerLEDFrames(color, on)
+func (m *EX2) PowerLED(color, state string) error {
+	frames, err := EX2PowerLEDFrames(color, state)
 	if err != nil {
 		return err
 	}

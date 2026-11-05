@@ -15,31 +15,39 @@ func TestEX2PowerLEDFrames(t *testing.T) {
 	cases := []struct {
 		name  string
 		color string
-		on    bool
+		state string
 		want  [2][]byte
 	}{
-		{"blue on", "blue", true, [2][]byte{
+		{"blue on", "blue", "on", [2][]byte{
 			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x11, 0x00, 0x01, 0xFB},
 		}},
-		{"blue off", "blue", false, [2][]byte{
+		{"blue off", "blue", "off", [2][]byte{
 			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
 		}},
-		{"red on", "red", true, [2][]byte{
+		{"blue blinking", "blue", "blinking", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x21, 0x00, 0x01, 0xFB},
+		}},
+		{"red on", "red", "on", [2][]byte{
 			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x14, 0x00, 0x01, 0xFB},
 		}},
-		{"red off", "red", false, [2][]byte{
+		{"red off", "red", "off", [2][]byte{
 			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+		}},
+		{"red blinking", "red", "blinking", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x24, 0x00, 0x01, 0xFB},
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := EX2PowerLEDFrames(c.color, c.on)
+			got, err := EX2PowerLEDFrames(c.color, c.state)
 			if err != nil {
-				t.Fatalf("EX2PowerLEDFrames(%q, %v): %v", c.color, c.on, err)
+				t.Fatalf("EX2PowerLEDFrames(%q, %q): %v", c.color, c.state, err)
 			}
 			if !bytes.Equal(got[0], c.want[0]) {
 				t.Errorf("frame1 = % X, want % X", got[0], c.want[0])
@@ -53,8 +61,16 @@ func TestEX2PowerLEDFrames(t *testing.T) {
 
 func TestEX2PowerLEDFrames_RejectsUnknownColor(t *testing.T) {
 	for _, bad := range []string{"", "green", "BLUE", "Red"} {
-		if _, err := EX2PowerLEDFrames(bad, true); err == nil {
-			t.Errorf("EX2PowerLEDFrames(%q, true): want error, got nil", bad)
+		if _, err := EX2PowerLEDFrames(bad, "on"); err == nil {
+			t.Errorf("EX2PowerLEDFrames(%q, \"on\"): want error, got nil", bad)
+		}
+	}
+}
+
+func TestEX2PowerLEDFrames_RejectsUnknownState(t *testing.T) {
+	for _, bad := range []string{"", "ON", "flashing"} {
+		if _, err := EX2PowerLEDFrames("red", bad); err == nil {
+			t.Errorf("EX2PowerLEDFrames(\"red\", %q): want error, got nil", bad)
 		}
 	}
 }
@@ -195,7 +211,7 @@ func TestEX2_PowerLED_SendsBothFramesInOrder(t *testing.T) {
 	m := NewEX2(OpenFile(fake.Slave))
 
 	done := make(chan error, 1)
-	go func() { done <- m.PowerLED("blue", true) }()
+	go func() { done <- m.PowerLED("blue", "on") }()
 
 	got := fake.ReadFrame(t, 14, 3*time.Second)
 	if err := <-done; err != nil {
@@ -222,7 +238,7 @@ func TestEX2_PowerLED_PausesBetweenFrames(t *testing.T) {
 
 	done := make(chan error, 1)
 	start := time.Now()
-	go func() { done <- m.PowerLED("blue", true) }()
+	go func() { done <- m.PowerLED("blue", "on") }()
 
 	fake.ReadFrame(t, 14, 3*time.Second)
 	if err := <-done; err != nil {
@@ -238,7 +254,7 @@ func TestEX2_PowerLED_PausesBetweenFrames(t *testing.T) {
 func TestEX2_PowerLED_RejectsUnknownColor(t *testing.T) {
 	fake := fakemcu.New(t)
 	m := NewEX2(OpenFile(fake.Slave))
-	if err := m.PowerLED("green", true); err == nil {
+	if err := m.PowerLED("green", "on"); err == nil {
 		t.Error(`PowerLED("green", true): want error, got nil`)
 	}
 }
@@ -248,7 +264,7 @@ func TestEX2_PowerLED_FirstFrameWriteErrorPropagates(t *testing.T) {
 	m := NewEX2(OpenFile(fake.Slave))
 	fake.Slave.Close()
 
-	if err := m.PowerLED("blue", true); err == nil {
+	if err := m.PowerLED("blue", "on"); err == nil {
 		t.Error("PowerLED on a closed fd: want error, got nil")
 	}
 }

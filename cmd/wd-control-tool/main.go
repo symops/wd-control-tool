@@ -355,8 +355,9 @@ chained in one command, run in the order given:
 
 led's own arguments:
   ex2:       ZONE COLOR STATE   zones: power,hd0,hd1; colors: red,blue; states: on,off,blinking(blink)
-                    blinking is confirmed only for the power zone - hd-bay blinking
-                    has no confirmed register behavior and reports an error
+                    blinking is confirmed for power (both colors) and hd0/hd1 red;
+                    hd0/hd1 blue blinking has no confirmed register behavior and
+                    reports an error rather than assuming it matches red
   ex4:       ZONE COLOR STATE   zones: power,hd0,hd1,hd2,hd3; colors: red,blue; states: on,off,blinking(blink)
                     blue blinking on hd0..hd3 has no vendor implementation at all
                     (confirmed by decompilation) and reports an error; every other
@@ -728,17 +729,13 @@ func buildEX2PowerLEDAction(serialPath, colorArg, stateArg string) (*action, int
 	if err == nil {
 		err = serr
 	}
-	// Only on/off were captured on real hardware - blinking has no
-	// confirmed MCU frame (see mcu.ErrEX2PowerLEDBlinkingUnconfirmed),
-	// reported as a plan error rather than guessed or silently
-	// dropped.
-	if err == nil && stateVal == led.Blinking {
-		err = mcu.ErrEX2PowerLEDBlinkingUnconfirmed
-	}
 
 	var frames [2][]byte
 	if err == nil {
-		frames, err = mcu.EX2PowerLEDFrames(color.String(), stateVal == led.On)
+		// stateVal.String(), not the raw stateArg: normalizes aliases
+		// ("blink" -> "blinking") to exactly the spelling
+		// EX2PowerLEDFrames itself switches on.
+		frames, err = mcu.EX2PowerLEDFrames(color.String(), stateVal.String())
 	}
 
 	otherColor := "red"
@@ -765,7 +762,7 @@ func buildEX2PowerLEDAction(serialPath, colorArg, stateArg string) (*action, int
 				return operr
 			}
 			defer p.Close()
-			return mcu.NewEX2(p).PowerLED(color.String(), stateVal == led.On)
+			return mcu.NewEX2(p).PowerLED(color.String(), stateVal.String())
 		},
 	}, exitOK
 }

@@ -508,10 +508,24 @@ assumption:
   the 4 confirmed values. `0xF1018100` (bit 13 = `0x2000`) was a
   coincidence: that register holds a constant `0x00002000` across
   every transition tested - unrelated to LED control.
-- **`blinking` has no confirmed register behavior at all** - no real
-  transition was ever tested for it, and guessing one from the old,
-  disproven model would repeat the same mistake. `wd-control-tool`
-  reports it as an error (`errHDBayBlinkingUnconfirmed`) instead.
+- **`blinking` is confirmed for RED only (hd0/hd1), not BLUE** -
+  after a real-hardware report that the vendor's own `led hd0/hd1 red
+  blinking` works, a live register dump (`hdBayReg1`/`hdBayReg2` read
+  directly, before/during/after the real command) found `hdBayReg1`
+  completely unchanged throughout, while `hdBayReg2`'s own hd0-red bit
+  (21) was observed to **oscillate between two reads taken moments
+  apart with no command run in between** - a genuine SoC hardware
+  blink generator actually driving the pin, not a software re-write
+  (the same mechanism already confirmed for EX4's own red hd-bay
+  blinking - see `pkg/led/ex4_hdbay.go`). Confirmed mechanism: set the
+  zone's bit in `hdBayReg2` only, leave `hdBayReg1` untouched. hd1's
+  own bit (20) wasn't directly caught mid-oscillation the same way,
+  but its own capture showed no OTHER unexpected bit change either -
+  consistent with (not contradicting) the same reg2-only mechanism
+  combined with hd1's own independently-confirmed bit from the on/off
+  capture above. BLUE's own blinking frame is still unconfirmed (no
+  report either way) - `wd-control-tool` still reports it as an error
+  (`errHDBayBlinkingUnconfirmed`) rather than assuming it matches red.
 - **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
   hardware has been available to test them, and the formula that
   would have predicted them was proven wrong for hd0/hd1, so
@@ -613,27 +627,30 @@ the command this spec previously listed as one of its anomalous,
 unexplained table rows: **`NewPWRLed`** (`b4=0x26`, dispatch group
 24/`buildValueFrame` shape: `FA 26 00 <value> 00 01 FB`).
 
-`<value>` is a bitmask, confirmed via a live strace capturing all 4
-combinations of color x on/off:
+`<value>` is a bitmask, confirmed via a live strace capturing all 6
+combinations of color x off/on/blinking (the blinking pair added
+after a real-hardware report that the vendor's own tool supports it -
+previously only off/on had been captured):
 
 | Command | Frame 1 (clear other color) | Frame 2 (set this color) |
 |---|---|---|
 | `led power blue on` | `FA 26 00 04 00 01 FB` | `FA 26 00 11 00 01 FB` |
 | `led power blue off` | `FA 26 00 04 00 01 FB` | `FA 26 00 01 00 01 FB` |
+| `led power blue blinking` | `FA 26 00 04 00 01 FB` | `FA 26 00 21 00 01 FB` |
 | `led power red on` | `FA 26 00 01 00 01 FB` | `FA 26 00 14 00 01 FB` |
 | `led power red off` | `FA 26 00 01 00 01 FB` | `FA 26 00 04 00 01 FB` |
+| `led power red blinking` | `FA 26 00 01 00 01 FB` | `FA 26 00 24 00 01 FB` |
 
 This decodes perfectly into: blue bit = `0x01`, red bit = `0x04`, "on"
-flag = `0x10`. Frame 1 always clears the *other* color (value = that
-color's bit alone, no on-flag - itself a genuine "turn that color
-off"); frame 2 sets *this* color to the requested state (value = this
-color's bit, OR'd with the on-flag if turning on). Unlike Power,
-HD-bay's two colors turned out to have NO confirmed mutual exclusion
-(see "HD-bay" above - a stale version of this sentence used to claim
-otherwise, before that capture). No frame for "blinking" has been
-captured - `wd-control-tool` reports that as an error rather than
-guessing one (see `pkg/mcu/ex2.go`'s `EX2PowerLEDFrames`,
-`ErrEX2PowerLEDBlinkingUnconfirmed`).
+flag = `0x10`, **"blinking" flag = `0x20`** (a third, separate single
+bit - not combined with the on flag). Frame 1 always clears the
+*other* color (value = that color's bit alone, no flag - itself a
+genuine "turn that color off"); frame 2 sets *this* color to the
+requested state (value = this color's bit, OR'd with the matching
+state's flag, or no flag at all for off). Unlike Power, HD-bay's two
+colors turned out to have NO confirmed mutual exclusion (see "HD-bay"
+above - a stale version of this sentence used to claim otherwise,
+before that capture). See `pkg/mcu/ex2.go`'s `EX2PowerLEDFrames`.
 
 **Inter-frame pacing between the two frames is load-bearing, not
 cosmetic** - found the hard way (again): sending both back-to-back
@@ -976,6 +993,16 @@ itself (not just the vendor tool).
    HD-bay mechanism is DIFFERENT from EX2's" above. hd2/hd3 are now
    confirmed on EX4 too (they were never confirmed for EX2, which
    doesn't physically have them).
+9. ~~EX2's "blinking" has no confirmed frame, for either power or
+   HD-bay~~ - **resolved for power (both colors) and HD-bay RED**:
+   after a real-hardware report that the vendor's own tool supports
+   all of `led power red/blue blinking` and `led hd0/hd1 red
+   blinking`, a live strace (power) and a live register dump (HD-bay)
+   confirmed both - see "Power LED" (the MCU frame's own `0x20` flag
+   bit) and "HD-bay" (confirmed to set `hdBayReg2`'s bit only, leaving
+   `hdBayReg1` untouched - the SoC's own hardware blink generator then
+   drives the pin) above. HD-bay BLUE's own blinking frame is still
+   unconfirmed (no report either way) and remains an error.
 
 ## Author
 

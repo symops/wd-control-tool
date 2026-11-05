@@ -802,6 +802,33 @@ immediately in a single clean observation, but can silently flip
 between a quick, memory-driven recollection of "which one did I just
 run" after both were tried close together.
 
+A fifteenth finding: EX2's own "blinking" state, previously an
+unconfirmed guess-avoidance error for both power and HD-bay, turned
+out to actually work on real hardware via the vendor's own tool -
+found only because the user tried it directly and reported back,
+not from any capture this project had already taken. Power's MCU
+frame decoded the same way its on/off frames always had (clear-
+other/set-own, now with a THIRD flag bit, `0x20`, alongside the
+existing `0x10` "on" flag) from a plain strace, no surprises there.
+HD-bay's own confirmation needed a genuinely different technique:
+`/dev/mem` writes aren't syscalls, so strace shows nothing for them
+(same limitation this project already knew about) - but a plain
+before/after/during READ of the two known registers (via a tiny
+standalone helper reusing `pkg/regio` directly, cross-compiled and
+copied to the board) caught something more interesting than a
+static bit flip: `hdBayReg2`'s own bit, read twice in a row with NO
+command run in between, had already changed value on its own - the
+SoC's own hardware blink generator actively toggling the pin in real
+time, confirmed by observation rather than inferred. `hdBayReg1`
+stayed completely constant throughout, so the real write this
+project's own code now performs is "set the bit in reg2 only," not
+a guess extrapolated from on/off's "touch both registers
+identically" pattern - the two states genuinely don't share a
+mechanism. Only RED was reported as working by the user (hd0 and
+hd1) - BLUE's own HD-bay blinking frame remains exactly as
+unconfirmed as before and still errors, not assumed symmetric with
+red just because the mechanism rhymes.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

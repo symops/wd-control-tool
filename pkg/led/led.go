@@ -188,11 +188,16 @@ func colorBit(c Color) (uint32, uint32, error) {
 //
 // HD-bay: a real register-page capture showed red/blue use entirely
 // DIFFERENT, non-overlapping bits (see hdBayBits) - there is no
-// confirmed mutual exclusion to enforce here (unlike Power), so this
-// only ever touches the requested color's own bit, in both
-// registers. No real on/off transition has ever produced a frame
-// matching a "blinking" state for HD-bay, so that's reported as an
-// error (errHDBayBlinkingUnconfirmed) rather than guessed.
+// confirmed mutual exclusion to enforce here (unlike Power), so
+// on/off only ever touch the requested color's own bit, in both
+// registers. Blinking is different again: confirmed on real
+// hardware for RED only (hd0/hd1) - a live register dump found it
+// sets the zone's bit in hdBayReg2 ONLY, leaving hdBayReg1 untouched
+// (the SoC's own hardware blink generator then drives the pin - see
+// Plan's own HD-bay Blinking case for the full capture). BLUE's
+// blinking frame remains unconfirmed and is reported as an error
+// (errHDBayBlinkingUnconfirmed) rather than assumed symmetric with
+// red.
 func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 	if zone == Power {
 		ownBit, otherBit, err := colorBit(color)
@@ -235,7 +240,31 @@ func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 			{Addr: hdBayReg2, Set: bit},
 		}, nil
 	case Blinking:
-		return nil, errHDBayBlinkingUnconfirmed(zone, color)
+		// Confirmed on real EX2 hardware for RED only (hd0 and hd1,
+		// via `led hd0/hd1 red blinking`) - BLUE's blinking frame
+		// remains unconfirmed, still reported as an error rather than
+		// assumed symmetric with red. A live register dump taken
+		// before/after/during real `led hd0 red blinking` found
+		// hdBayReg1 (0xF1018140) completely unchanged throughout,
+		// while hdBayReg2's (0xF1018150) own hd0-red bit (21) was
+		// observed oscillating between separate reads taken moments
+		// apart with no command run in between - a genuine SoC
+		// hardware blink generator driving the pin, not software
+		// re-writing the register, matching the EXACT mechanism
+		// already confirmed and implemented for EX4's own red hd-bay
+		// blinking (see pkg/led/ex4_hdbay.go): set the zone's bit in
+		// reg2 only, leave reg1 untouched. hd1's own bit (20) wasn't
+		// directly caught mid-oscillation the same way, but its
+		// capture showed no OTHER unexpected bit change either,
+		// consistent with (not contradicting) the same reg2-only
+		// mechanism combined with hd1's own already-independently-
+		// confirmed bit (from the on/off capture - see hdBayBits).
+		if color != Red {
+			return nil, errHDBayBlinkingUnconfirmed(zone, color)
+		}
+		return []regio.Write{
+			{Addr: hdBayReg2, Set: bit},
+		}, nil
 	default:
 		return nil, errBadState(state)
 	}

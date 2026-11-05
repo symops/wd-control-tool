@@ -96,16 +96,17 @@ func TestRun_HelpDocumentsTempCommandCurrentBehavior(t *testing.T) {
 }
 
 // -h's led section claimed "blinking" works for every ex2/ex4 zone -
-// no longer true: hd-bay blinking has no confirmed register behavior
-// (see pkg/led's hdBayBits/errHDBayBlinkingUnconfirmed) and reports
-// an error. Pin that the caveat is actually documented.
+// not true for EX2's hd0/hd1 BLUE specifically (no confirmed register
+// behavior, see pkg/led's hdBayBits/errHDBayBlinkingUnconfirmed) -
+// RED's own HD-bay blinking is confirmed, unlike blue's. Pin that the
+// caveat is actually documented.
 func TestRun_HelpDocumentsHDBayBlinkingCaveat(t *testing.T) {
 	code, out, _ := captureRun(t, []string{"-h"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q", code, out)
 	}
-	if !strings.Contains(out, "blinking is confirmed only for the power zone") {
-		t.Errorf("-h output missing the HD-bay blinking caveat: out=%q", out)
+	if !strings.Contains(out, "hd0/hd1 blue blinking has no confirmed register behavior") {
+		t.Errorf("-h output missing the HD-bay blue blinking caveat: out=%q", out)
 	}
 }
 
@@ -2643,9 +2644,12 @@ func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) 
 // once been exercised end to end.
 // EX2's power LED is MCU-driven (NewPWRLed), not a /dev/mem GPIO
 // poke like every other LED zone - see buildEX2PowerLEDAction. These
-// 4 cases are the exact bytes captured on real EX2 hardware via a
+// 6 cases are the exact bytes captured on real EX2 hardware via a
 // live strace of the vendor `led` tool (see
-// mcu.EX2PowerLEDFrames's doc comment).
+// mcu.EX2PowerLEDFrames's doc comment) - blinking (added after a
+// real-hardware report that the vendor's own tool supports it)
+// included alongside on/off, not just the two states this spec
+// originally only had captures for.
 func TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase(t *testing.T) {
 	cases := []struct {
 		color, state string
@@ -2659,6 +2663,10 @@ func TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase(t *testing.T) {
 			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
 		}},
+		{"blue", "blinking", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x21, 0x00, 0x01, 0xFB},
+		}},
 		{"red", "on", [2][]byte{
 			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x14, 0x00, 0x01, 0xFB},
@@ -2666,6 +2674,10 @@ func TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase(t *testing.T) {
 		{"red", "off", [2][]byte{
 			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
 			{0xFA, 0x26, 0x00, 0x04, 0x00, 0x01, 0xFB},
+		}},
+		{"red", "blinking", [2][]byte{
+			{0xFA, 0x26, 0x00, 0x01, 0x00, 0x01, 0xFB},
+			{0xFA, 0x26, 0x00, 0x24, 0x00, 0x01, 0xFB},
 		}},
 	}
 	for _, c := range cases {
@@ -2679,27 +2691,6 @@ func TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("%s %s: wire bytes = % X, want % X", c.color, c.state, got, want)
 		}
-	}
-}
-
-// EX2 power LED blinking has no confirmed MCU frame - must be a
-// clear, reported error (both as a real-run usage error and as a
-// dry-run "would fail"), never silently guessed or dropped.
-func TestRun_EX2PowerLedBlinking_Unconfirmed(t *testing.T) {
-	code, _, errOut := captureRun(t, []string{"-b", "ex2", "-l", "power", "blue", "blinking"})
-	if code != exitUsage {
-		t.Errorf("real run: code=%d, want %d; err=%q", code, exitUsage, errOut)
-	}
-	if !strings.Contains(errOut, "blinking") || !strings.Contains(errOut, "no confirmed") {
-		t.Errorf("errOut=%q, want it to mention blinking being unconfirmed", errOut)
-	}
-
-	code, out, _ := captureRun(t, []string{"-b", "ex2", "-n", "-l", "power", "blue", "blinking"})
-	if code != exitOK {
-		t.Errorf("dry run: code=%d, want %d (dry-run always exits 0)", code, exitOK)
-	}
-	if !strings.Contains(out, "would fail") {
-		t.Errorf("dry run out=%q, want a \"would fail\" line", out)
 	}
 }
 
