@@ -128,6 +128,26 @@ const (
 	hdBayReg1 = 0xF1018140
 	hdBayReg2 = 0xF1018150
 
+	// hdBayBlinkEn: CONFIRMED on real EX2 hardware via a proper
+	// before/after diff of a full register range across a known
+	// transition (on -> blinking, for both hd0 and hd1 independently -
+	// the technique the earlier reg2-oscillation "confirmation" should
+	// have used from the start, see Plan's own HD-bay Blinking case).
+	// One bit per bay, reusing the EXACT SAME bit positions as
+	// hdBayBits' RED column (hd0=1<<21, hd1=1<<20) - a separate
+	// register from both hdBayReg1 and hdBayReg2, and NOT touched by
+	// plain on/off at all (confirmed 0x00000000 while a bay was
+	// steadily lit). hdBayReg1 stays completely unchanged across the
+	// on->blinking transition (confirmed even for hd1, which had never
+	// been turned on at all, so its hdBayReg1 bit was 0 throughout, yet
+	// the vendor's own blinking command still worked) - hdBayReg1 is
+	// simply not part of the blink path. hdBayReg2 DOES change during
+	// blinking, but only as a side effect of the hardware blink
+	// generator actively driving the pin (the oscillation first
+	// observed, now understood as a readback, not a control write) -
+	// writing hdBayReg2 was the earlier, wrong guess.
+	hdBayBlinkEn = 0xF1018148
+
 	redBit  = uint32(1) << 28
 	blueBit = uint32(1) << 29
 )
@@ -190,13 +210,14 @@ func colorBit(c Color) (uint32, uint32, error) {
 // DIFFERENT, non-overlapping bits (see hdBayBits) - there is no
 // confirmed mutual exclusion to enforce here (unlike Power), so
 // on/off only ever touch the requested color's own bit, in both
-// registers. Blinking is UNCONFIRMED for both colors and reported as
-// an error (errHDBayBlinkingUnconfirmed) - a reg2-only write was
-// briefly shipped for RED after an earlier capture looked like it
-// confirmed the EX4-style reg2-only hardware-blink mechanism, but a
-// real-hardware report showed it has no actual effect, so that
-// capture's reading was wrong and the real mechanism is still
-// unknown (see Plan's own HD-bay Blinking case for the full story).
+// registers. Blinking is confirmed for RED only (hd0/hd1) via a
+// dedicated register, hdBayBlinkEn - separate from the on/off
+// register pair - found by properly diffing a full register range
+// across a known on->blinking transition (see hdBayBlinkEn's doc
+// comment for why this supersedes an earlier, wrong reg2-based
+// guess that had no real effect). BLUE's blinking frame remains
+// unconfirmed and is reported as an error (errHDBayBlinkingUnconfirmed)
+// rather than assumed symmetric with red.
 func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 	if zone == Power {
 		ownBit, otherBit, err := colorBit(color)
@@ -239,30 +260,30 @@ func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 			{Addr: hdBayReg2, Set: bit},
 		}, nil
 	case Blinking:
-		// UNCONFIRMED for both colors (reverted - see below).
-		//
-		// A prior register dump taken before/after/during real `led
-		// hd0 red blinking` found hdBayReg2's (0xF1018150) own hd0-red
-		// bit (21) oscillating between two reads with no command run
-		// in between, and hdBayReg1 (0xF1018140) apparently unchanged,
-		// which was read as "reg2-only drives a hardware blink
-		// generator, same mechanism as EX4's red hd-bay" - so this
-		// package briefly shipped exactly that (set the zone's bit in
-		// reg2 only, leave reg1 untouched) for RED only. A real-
-		// hardware report (`led hd0/hd1 red blinking` via this tool
-		// having no visible effect) showed that write does NOT
-		// actually make the LED blink, so the capture's "reg1
-		// unchanged" reading was misleading - most likely reg1 was
-		// already sitting at the SAME value (bit already set from a
-		// prior `on` in the same capture session) rather than genuinely
-		// irrelevant to blinking, and/or hdBayReg2's oscillation was
-		// itself a readback of an already-blinking pin rather than a
-		// register whose own write controls anything. Either way the
-		// true mechanism is NOT confirmed, so this reverts to erroring
-		// for both colors until a proper on-vs-blinking register diff
-		// (not just a during-blinking before/after) is captured - see
-		// BUILDING.md for the capture procedure this now calls for.
-		return nil, errHDBayBlinkingUnconfirmed(zone, color)
+		// Confirmed on real EX2 hardware for RED only (hd0 and hd1) -
+		// a PROPER capture this time: a full register-range diff
+		// between a known `on` state and the vendor's own `led
+		// hd0/hd1 red blinking`, not just two reads taken seconds
+		// apart during an already-ambiguous state (that earlier,
+		// wrong attempt wrote hdBayReg2 and had no actual effect on
+		// real hardware - see hdBayBlinkEn's doc comment for the full
+		// story and why this is right this time). Two independent
+		// transitions (hd0, already on; hd1, never turned on at all)
+		// agreed: only hdBayBlinkEn's own bit changed - hdBayReg1
+		// stayed untouched in both cases (confirmed irrelevant, not
+		// just unchanged-by-coincidence, since hd1's own hdBayReg1 bit
+		// was 0 throughout yet blinking still worked), and hdBayReg2's
+		// changes were a side effect of the hardware blink generator
+		// actually driving the pin, not something this write needs to
+		// touch. BLUE's own blinking frame remains unconfirmed (no
+		// report either way) and is still reported as an error rather
+		// than assumed symmetric with red.
+		if color != Red {
+			return nil, errHDBayBlinkingUnconfirmed(zone, color)
+		}
+		return []regio.Write{
+			{Addr: hdBayBlinkEn, Set: bit},
+		}, nil
 	default:
 		return nil, errBadState(state)
 	}

@@ -858,6 +858,29 @@ and diff the two dumps directly - whatever bit(s) differ between
 those two concrete states, and only those, are candidates for the
 real blink-enable control.
 
+That exact capture was then done, and it worked cleanly: a
+`regdump range 0xF1018000 0xF1018200` diff between `led hd0 red on`
+and `led hd0 red blinking` showed exactly one register changing -
+`0xF1018148`, a THIRD register distinct from both `hdBayReg1`
+(`0x140`) and `hdBayReg2`(`0x150`), gaining the bay's own bit (hd0=bit
+21, the SAME bit `hdBayBits` already uses for hd0 red - no new
+numbering to learn). A second, independent transition straight into
+`led hd1 red blinking` - with hd1 never turned on at all, so its
+`hdBayReg1` bit was `0` throughout - showed the identical pattern
+(only `0x148`'s hd1 bit, 20, changed) and, crucially, PROVED
+`hdBayReg1` genuinely doesn't matter for blinking (not just
+coincidentally unchanged): the vendor's own blinking command worked
+with that bit sitting at 0 the whole time. `hdBayReg2` did change in
+the second capture too, but as a value already consistent with it
+being the hardware's live pin-state readback (the same register whose
+oscillation triggered the original, wrong guess) rather than
+something the write needs to touch. `wd-control-tool` now writes only
+`hdBayBlinkEn` (`0xF1018148`)'s bit for HD-bay `blinking`, RED only -
+BLUE remains unconfirmed and still errors. The two-independent-
+transitions shape of this capture (one bay already on, one bay never
+touched) is what made it conclusive rather than merely suggestive -
+a single transition couldn't have ruled out `hdBayReg1` mattering.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

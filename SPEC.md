@@ -508,27 +508,32 @@ assumption:
   the 4 confirmed values. `0xF1018100` (bit 13 = `0x2000`) was a
   coincidence: that register holds a constant `0x00002000` across
   every transition tested - unrelated to LED control.
-- **`blinking` is UNCONFIRMED for both colors (hd0/hd1)** - a
-  real-hardware report said the vendor's own `led hd0/hd1 red
-  blinking` works, and a live register dump (`hdBayReg1`/`hdBayReg2`
-  read directly, before/during/after the real command) found
-  `hdBayReg1` apparently unchanged throughout while `hdBayReg2`'s own
-  hd0-red bit (21) oscillated between two reads with no command run
-  in between. That looked like the same reg2-only hardware blink
-  generator already confirmed for EX4's red hd-bay, and
-  `wd-control-tool` briefly implemented exactly that (set the zone's
-  bit in `hdBayReg2` only, leave `hdBayReg1` untouched) for RED. A
-  follow-up real-hardware report showed that write has **no actual
-  effect** - the LED doesn't blink - so the capture's reading was
-  wrong: most likely `hdBayReg1` was simply already sitting at the
-  value `on` had left it at (not genuinely irrelevant to blinking),
-  and/or `hdBayReg2`'s oscillation was itself a readback of an
-  already-blinking pin rather than a register whose write controls
-  anything. `wd-control-tool` reverted to reporting an error
-  (`errHDBayBlinkingUnconfirmed`) for both colors until a proper
-  capture - diffing the FULL register state between a confirmed `on`
-  and a (claimed) `blinking` transition, not just reading the same
-  register twice during blinking - identifies the real mechanism.
+- **`blinking` is confirmed for RED only (hd0/hd1), not BLUE** - via a
+  THIRD register, `hdBayBlinkEn` (`0xF1018148`), separate from both
+  `hdBayReg1`/`hdBayReg2`. Found by properly diffing a full
+  `0xF1018000`-`0xF1018200` register range across two independent
+  real transitions: `led hd0 red on` -> `led hd0 red blinking` (hd0
+  already lit) and, separately, straight into `led hd1 red blinking`
+  with hd1 never turned on at all. Both transitions changed exactly
+  one thing: the bay's own bit in `hdBayBlinkEn` (same bit positions
+  as `hdBayBits`' RED column - hd0=`1<<21`, hd1=`1<<20`). `hdBayReg1`
+  never changed in either transition - confirmed irrelevant to
+  blinking, not just coincidentally unchanged, since hd1's own
+  `hdBayReg1` bit was `0` throughout yet the vendor's command still
+  worked. `hdBayReg2` DID change, but only as a side effect of the
+  hardware blink generator actually driving the pin in real time (the
+  same oscillation seen earlier, now understood as a readback of the
+  live pin state, not a register whose write controls anything).
+  `wd-control-tool` writes only `hdBayBlinkEn`'s bit for `blinking`.
+  An EARLIER attempt (based on a weaker capture - reading `hdBayReg2`
+  twice during an already-blinking state, with no comparison against
+  a known `on` baseline) wrongly concluded `hdBayReg2` itself was the
+  control register; that write shipped briefly and had **no actual
+  effect** on real hardware, and was reverted before this proper
+  capture replaced it. BLUE's own blinking frame is still unconfirmed
+  (no report either way) - `wd-control-tool` still reports it as an
+  error (`errHDBayBlinkingUnconfirmed`) rather than assuming it
+  matches red.
 - **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
   hardware has been available to test them, and the formula that
   would have predicted them was proven wrong for hd0/hd1, so
@@ -997,15 +1002,19 @@ itself (not just the vendor tool).
    confirmed on EX4 too (they were never confirmed for EX2, which
    doesn't physically have them).
 9. ~~EX2's "blinking" has no confirmed frame, for either power or
-   HD-bay~~ - **resolved for power (both colors) only**: a live strace
-   confirmed `led power red/blue blinking` - see "Power LED" (the MCU
-   frame's own `0x20` flag bit) above. EX2's HD-bay `blinking` (either
-   color, hd0/hd1) remains unconfirmed: a register dump that initially
-   looked like it confirmed RED was shown wrong by a follow-up
-   real-hardware report (the write it implied has no actual effect),
-   so `wd-control-tool` reports an error for both colors - see
-   "HD-bay" above for the full story and what capture would actually
-   resolve it.
+   HD-bay~~ - **resolved for power (both colors) and HD-bay RED**: a
+   live strace confirmed `led power red/blue blinking` - see "Power
+   LED" (the MCU frame's own `0x20` flag bit) above. EX2's HD-bay
+   `blinking` needed two attempts: a first register dump (reading
+   `hdBayReg2` twice during an already-blinking state) looked like it
+   confirmed RED but had no actual effect on real hardware; a proper
+   follow-up capture - diffing a full register range between a known
+   `on` state and the vendor's own `led hd0/hd1 red blinking`, across
+   two independent real transitions - found the real control: a THIRD
+   register, `hdBayBlinkEn` (`0xF1018148`), one bit per bay. See
+   "HD-bay" above for the full story. BLUE's own HD-bay blinking
+   frame is still unconfirmed (no report either way) and remains an
+   error.
 
 ## Author
 
