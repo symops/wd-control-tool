@@ -554,3 +554,84 @@ func TestEX2_SetDateAndTime_ExhaustsAttemptsOnRepeatedNoReply(t *testing.T) {
 		t.Fatal("SetDateAndTime never returned")
 	}
 }
+
+// SetDateAndTime's own sendLegacy write-error branch (returns
+// immediately, no retry at all - distinct from the verify-READ error
+// branches the other tests above cover) had no coverage - found via
+// `go tool cover` (round 19). Closing the underlying fd first makes
+// the very FIRST attempt's own write fail immediately.
+func TestEX2_SetDateAndTime_WriteErrorPropagatesImmediately(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+	fake.Slave.Close()
+
+	if err := m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58); err == nil {
+		t.Fatal("SetDateAndTime with a closed port: want error, got nil")
+	}
+}
+
+// SetDateAndTime's own "verify reply failed to decode" branch
+// (distinct from both "no reply" and "mismatched date", which the
+// other tests above already cover) had no coverage either - same
+// `go tool cover` pass. Answering with a well-framed but undecodable
+// reply (the same genuinely-unrecoverable headless tail
+// TestEX2DecodeDateAndTime_RejectsShortOrMalformedReply's siblings
+// use) for every attempt forces every retry down this exact branch
+// before exhausting them.
+func TestEX2_SetDateAndTime_RetriesWriteWhenVerifyReplyUndecodable(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58) }()
+
+	unrecoverable := []byte{0x30, 0x00, 0x00, 0x00, 0x00, 0xFB}
+	for attempt := 0; attempt < ex2RTCVerifyAttempts; attempt++ {
+		fake.ReadFrame(t, 13, ex2RTCVerifyReadTimeout+time.Second) // the write
+		fake.ReadFrame(t, 7, time.Second)                          // the verify read request
+		if _, err := fake.Master.Write(unrecoverable); err != nil {
+			t.Fatalf("attempt %d: write fake verify reply: %v", attempt+1, err)
+		}
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("SetDateAndTime with every verify reply undecodable: want error, got nil")
+		}
+	case <-time.After(ex2RTCVerifyAttempts * (ex2RTCVerifyReadTimeout + 2*time.Second)):
+		t.Fatal("SetDateAndTime never returned")
+	}
+}
+
+// SetDateAndTime's "verify read itself failed" branch (a genuine I/O
+// error from DateAndTimeReply, NOT the "len(reply)==0" no-reply
+// timeout branch the exhaustion test above covers) had no coverage -
+// found via `go tool cover` (round 19, same pass as the two tests
+// above). Closing the fake pty's MASTER side right after the first
+// attempt's write+request go out makes the slave-side read fail with
+// a real I/O error (confirmed experimentally via WD_MCU_TRACE: "input/
+// output error", not io.EOF) - recvBytes treats that as a genuine
+// error, not a timeout, hitting lastErr=err;continue. The attempt
+// after that then also fails to WRITE (same broken fd), so this one
+// test exercises both error branches, not just the recv one.
+func TestEX2_SetDateAndTime_VerifyReadIOErrorPropagates(t *testing.T) {
+	fake := fakemcu.New(t)
+	m := NewEX2(OpenFile(fake.Slave))
+
+	done := make(chan error, 1)
+	go func() { done <- m.SetDateAndTime(2026, 11, 2, 1, 13, 38, 58) }()
+
+	fake.ReadFrame(t, 13, time.Second) // the write
+	fake.ReadFrame(t, 7, time.Second)  // the verify read request
+	fake.Master.Close()                // breaks the slave side's read AND any further write
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("SetDateAndTime after the pty broke mid-verify: want error, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SetDateAndTime never returned")
+	}
+}
