@@ -534,6 +534,13 @@ assumption:
   (no report either way) - `wd-control-tool` still reports it as an
   error (`errHDBayBlinkingUnconfirmed`) rather than assuming it
   matches red.
+- **Leaving `hdBayBlinkEn`'s bit set breaks `on`/`off` entirely** -
+  confirmed on real hardware: after a real `led hd0/hd1 red blinking`,
+  `wd-control-tool`'s own `on`/`off` had **no effect at all**, because
+  the hardware blink generator keeps driving the pin (and overriding
+  both `hdBayReg1`/`hdBayReg2`) as long as `hdBayBlinkEn`'s bit stays
+  set. `wd-control-tool`'s `on`/`off` now also clear the zone's bit in
+  `hdBayBlinkEn` (harmless when it was never set).
 - **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
   hardware has been available to test them, and the formula that
   would have predicted them was proven wrong for hd0/hd1, so

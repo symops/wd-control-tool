@@ -209,15 +209,20 @@ func colorBit(c Color) (uint32, uint32, error) {
 // HD-bay: a real register-page capture showed red/blue use entirely
 // DIFFERENT, non-overlapping bits (see hdBayBits) - there is no
 // confirmed mutual exclusion to enforce here (unlike Power), so
-// on/off only ever touch the requested color's own bit, in both
-// registers. Blinking is confirmed for RED only (hd0/hd1) via a
-// dedicated register, hdBayBlinkEn - separate from the on/off
-// register pair - found by properly diffing a full register range
-// across a known on->blinking transition (see hdBayBlinkEn's doc
-// comment for why this supersedes an earlier, wrong reg2-based
-// guess that had no real effect). BLUE's blinking frame remains
-// unconfirmed and is reported as an error (errHDBayBlinkingUnconfirmed)
-// rather than assumed symmetric with red.
+// on/off touch the requested color's own bit in hdBayReg1/hdBayReg2
+// AND clear it in hdBayBlinkEn - the clear is confirmed necessary on
+// real hardware, not defensive: without it, `on`/`off` have no effect
+// at all once a bay was left blinking (the hardware blink generator
+// keeps driving the pin and overriding both registers as long as
+// hdBayBlinkEn's bit stays set). Blinking is confirmed for RED only
+// (hd0/hd1) via that same dedicated register, hdBayBlinkEn - separate
+// from the on/off register pair - found by properly diffing a full
+// register range across a known on->blinking transition (see
+// hdBayBlinkEn's doc comment for why this supersedes an earlier,
+// wrong reg2-based guess that had no real effect). BLUE's blinking
+// frame remains unconfirmed and is reported as an error
+// (errHDBayBlinkingUnconfirmed) rather than assumed symmetric with
+// red.
 func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 	if zone == Power {
 		ownBit, otherBit, err := colorBit(color)
@@ -250,14 +255,26 @@ func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 	}
 	switch state {
 	case Off:
+		// Also clears hdBayBlinkEn's own bit - CONFIRMED NECESSARY on
+		// real hardware: without this, `off` after a real `blinking`
+		// had no effect at all (the hardware blink generator keeps
+		// overriding hdBayReg1/hdBayReg2 as long as hdBayBlinkEn's bit
+		// stays set, so plain Clear writes to those two registers are
+		// silently ignored). Harmless to clear unconditionally even
+		// when never set (Blue, or Red that was never blinking).
 		return []regio.Write{
 			{Addr: hdBayReg1, Clear: bit},
 			{Addr: hdBayReg2, Clear: bit},
+			{Addr: hdBayBlinkEn, Clear: bit},
 		}, nil
 	case On:
+		// Same reasoning as Off above - confirmed necessary, not just
+		// defensive: real hardware ignored `on` after `blinking` too,
+		// for the identical reason.
 		return []regio.Write{
 			{Addr: hdBayReg1, Set: bit},
 			{Addr: hdBayReg2, Set: bit},
+			{Addr: hdBayBlinkEn, Clear: bit},
 		}, nil
 	case Blinking:
 		// Confirmed on real EX2 hardware for RED only (hd0 and hd1) -

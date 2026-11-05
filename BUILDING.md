@@ -881,6 +881,21 @@ transitions shape of this capture (one bay already on, one bay never
 touched) is what made it conclusive rather than merely suggestive -
 a single transition couldn't have ruled out `hdBayReg1` mattering.
 
+A real-hardware test of the fix above immediately surfaced a second,
+related bug: `off`/`on` worked fine normally, but had NO EFFECT AT
+ALL once a bay had actually been set blinking - `wd-control-tool -b
+ex2 -l hd0 red off` after a real `hd0 red blinking` left the LED
+still blinking. The cause follows directly from `hdBayBlinkEn`'s own
+nature: it's the hardware blink generator's own enable switch, and
+once enabled, the generator keeps driving the pin and overriding
+`hdBayReg1`/`hdBayReg2` regardless of what plain `on`/`off` writes to
+them - so those writes were landing, just being ignored at the
+hardware level. The fix is the obvious complement: `on`/`off` now
+also clear the zone's bit in `hdBayBlinkEn`, confirmed (by the same
+real-hardware test, re-run after the fix) to restore normal control.
+Clearing a bit that was never set (Blue, or Red that was never
+blinking) is a harmless no-op, so this needed no extra guard.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

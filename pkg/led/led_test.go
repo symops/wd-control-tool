@@ -181,6 +181,54 @@ func TestPlan_HDBayRedBlinking(t *testing.T) {
 	}
 }
 
+// Confirmed on real EX2 hardware: after `blinking`, plain `off`/`on`
+// had NO EFFECT AT ALL until this test's own fix - the hardware blink
+// generator keeps driving the pin (and overriding hdBayReg1/
+// hdBayReg2) as long as hdBayBlinkEn's bit stays set, so leaving it
+// set is not harmless. `off`/`on` must also clear it. Exercises the
+// real Set path (via fakeregio), not just Plan's returned writes, so
+// a regression here would mean the bay silently can't be turned off
+// after blinking again.
+func TestSet_HDBayRedBlinking_ThenOffAndOn_ActuallyExitsBlinkMode(t *testing.T) {
+	for _, zone := range []Zone{HD0, HD1} {
+		bit, err := hdBayBit(zone, Red)
+		if err != nil {
+			t.Fatalf("hdBayBit(%v, Red): %v", zone, err)
+		}
+
+		mem := fakeregio.New(t)
+		if err := Set(mem, zone, Red, Blinking); err != nil {
+			t.Fatalf("Set %v red blinking: %v", zone, err)
+		}
+		if got := mustRead(t, mem, hdBayBlinkEn); got&bit == 0 {
+			t.Fatalf("%v red blinking: hdBayBlinkEn = 0x%x, want bit 0x%x set (precondition)", zone, got, bit)
+		}
+
+		if err := Set(mem, zone, Red, Off); err != nil {
+			t.Fatalf("Set %v red off (after blinking): %v", zone, err)
+		}
+		if got := mustRead(t, mem, hdBayBlinkEn); got&bit != 0 {
+			t.Errorf("%v red off (after blinking): hdBayBlinkEn = 0x%x, want bit 0x%x clear", zone, got, bit)
+		}
+
+		if err := Set(mem, zone, Red, Blinking); err != nil {
+			t.Fatalf("Set %v red blinking (again): %v", zone, err)
+		}
+		if err := Set(mem, zone, Red, On); err != nil {
+			t.Fatalf("Set %v red on (after blinking): %v", zone, err)
+		}
+		if got := mustRead(t, mem, hdBayBlinkEn); got&bit != 0 {
+			t.Errorf("%v red on (after blinking): hdBayBlinkEn = 0x%x, want bit 0x%x clear", zone, got, bit)
+		}
+		if got := mustRead(t, mem, hdBayReg1); got&bit == 0 {
+			t.Errorf("%v red on (after blinking): hdBayReg1 = 0x%x, want bit 0x%x set", zone, got, bit)
+		}
+		if got := mustRead(t, mem, hdBayReg2); got&bit == 0 {
+			t.Errorf("%v red on (after blinking): hdBayReg2 = 0x%x, want bit 0x%x set", zone, got, bit)
+		}
+	}
+}
+
 // HD2/HD3 are EX4-only (EX2 only has hd0/hd1) and have no confirmed
 // register bit - the old "1<<(13+idx)" formula this replaced was
 // proven wrong for hd0/hd1, so it's not trusted for hd2/hd3 either.
@@ -359,7 +407,7 @@ func FuzzPlan_NeverPanicsAndOnlyWritesKnownRegisters(f *testing.F) {
 
 	knownAddrs := map[int64]bool{
 		powerDataOut: true, powerBlinkEn: true,
-		hdBayReg1: true, hdBayReg2: true,
+		hdBayReg1: true, hdBayReg2: true, hdBayBlinkEn: true,
 	}
 
 	f.Fuzz(func(t *testing.T, zone, color, state int) {
