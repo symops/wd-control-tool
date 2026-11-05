@@ -959,27 +959,25 @@ itself (not just the vendor tool).
 ## Unresolved (tracked here so future work doesn't re-derive it)
 
 1. **The MCU-to-host reply frame format** is mostly still undecoded,
-   with three exceptions now: EX2U's `tmp_get` reply (see "EX2U
+   with four exceptions now: EX2U's `tmp_get` reply (see "EX2U
    protocol" above, `wd-control-tool -b ex2u -t`), EX2's
    `FanStatusGet` reply (see "Fan status read-back" above,
-   `wd-control-tool -b ex2 -f rpm`) and EX2's `RDateAndTime` reply
-   (see "RTC" above, `wd-control-tool -b ex2 -r r`/`-r s`) - the first
-   two reuse the same 7-byte `FA .. FB` shape as every request, with
-   the answer in byte 5; `RDateAndTime`'s reply is the 13-byte
-   `WDateAndTime` shape instead (request header echoed back, 7 BCD
-   fields where the request had its const+FB). Still unknown, and
-   **not needed for this tool's current feature set** (so not being
-   chased - same as item 5 below): the general request/reply
+   `wd-control-tool -b ex2 -f rpm`), and BOTH boards' `RDateAndTime`
+   reply (see "RTC" above, `wd-control-tool -b ex2/ex4 -r r`/`-r s`) -
+   EX4's own reply turned out to differ from EX2's (no request-header
+   echo, a different b7, a different `dow` convention - see "RTC"'s
+   own writeup), confirming this was right not to assume symmetric.
+   The first two reuse the same 7-byte `FA .. FB` shape as every
+   request, with the answer in byte 5; `RDateAndTime`'s reply is the
+   13-byte `WDateAndTime` shape instead (7 BCD fields). Still unknown,
+   and **not needed for this tool's current feature set** (so not
+   being chased - same as item 5 below): the general request/reply
    correlation mechanism (does every command get a reply, or only
    reads?), EX2/EX4's other sensor reads (`ThermalGet`/
    `GetThemister`), any acknowledgement that a write command was
    received, and the stray trailing byte seen after EX2U's own
-   `tmp_get` reply (possibly an unprompted second reply). **Still
-   wanted**, unlike the above: EX4's own `RDateAndTime` reply (do not
-   assume it matches EX2's - see "RTC" above) - needed before EX4's
-   `-r`/`-s` can be implemented, which this tool's user does want
-   eventually (EX4's `-w` alone is next up, not blocked on this).
-   Closing any of the above needs either a full decompile of
+   `tmp_get` reply (possibly an unprompted second reply). Closing any
+   of the above needs either a full decompile of
    `up_read_daemon`'s `RS232_Read` parsing loop, or (more reliably,
    per this project's own house rule - proven 4 times now) a live
    UART capture of a real reply.
