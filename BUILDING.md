@@ -910,6 +910,26 @@ replacing the generic `errHDBayBlinkingUnconfirmed`, now dead code and
 removed) and every doc mention of this case were updated to say so
 plainly, instead of leaving a solved question looking open.
 
+An eighteenth finding, and another correction - this time to the
+on/off fix itself: clearing `hdBayBlinkEn`'s bit for BOTH colors on
+`on`/`off` (done unconditionally, on the assumption that clearing an
+always-0 bit is harmless) broke plain BLUE `on`/`off` on real
+hardware - `wd-control-tool -b ex2 -l hd0/hd1 blue on/off` stopped
+having any visible effect the moment that write was added, despite
+blue never touching blinking at all. The lesson: `hdBayBlinkEn` is
+NOT a simple, independent, per-bit register the way `hdBayReg1`/
+`hdBayReg2` are - writing it at all, for a bit position (blue's) that
+was never itself confirmed to mean anything there, had a real side
+effect on the hardware, even though the bit value written was
+nominally a no-op (0 staying 0). "Clearing a bit that's always 0 is
+harmless" is exactly the kind of unverified generalization this
+project's own house rule exists to catch, and it slipped through here
+because the fix was reasoned by symmetry from RED's confirmed case
+rather than tested for BLUE specifically before shipping. Fixed by restricting the `hdBayBlinkEn` clear to RED only - pending
+a real-hardware re-test of plain blue `on`/`off` to confirm this
+narrower fix actually restores it, the same way every other change
+in this section was confirmed rather than assumed.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

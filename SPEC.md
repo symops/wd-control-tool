@@ -535,13 +535,21 @@ assumption:
   directly on real hardware and doesn't work either, so this isn't a
   gap to someday close by assuming it matches red. `wd-control-tool`
   reports an error (`errHDBayBlueBlinkingNotSupportedEX2`).
-- **Leaving `hdBayBlinkEn`'s bit set breaks `on`/`off` entirely** -
-  confirmed on real hardware: after a real `led hd0/hd1 red blinking`,
-  `wd-control-tool`'s own `on`/`off` had **no effect at all**, because
-  the hardware blink generator keeps driving the pin (and overriding
-  both `hdBayReg1`/`hdBayReg2`) as long as `hdBayBlinkEn`'s bit stays
-  set. `wd-control-tool`'s `on`/`off` now also clear the zone's bit in
-  `hdBayBlinkEn` (harmless when it was never set).
+- **Leaving `hdBayBlinkEn`'s bit set breaks `on`/`off` entirely, for
+  RED** - confirmed on real hardware: after a real `led hd0/hd1 red
+  blinking`, `wd-control-tool`'s own `on`/`off` had **no effect at
+  all**, because the hardware blink generator keeps driving the pin
+  (and overriding both `hdBayReg1`/`hdBayReg2`) as long as
+  `hdBayBlinkEn`'s bit stays set. `wd-control-tool`'s `on`/`off` now
+  also clear the zone's bit in `hdBayBlinkEn` - **RED ONLY**. This was
+  originally done for both colors, on the untested assumption that
+  clearing an always-0 bit is harmless; a real-hardware report showed
+  plain BLUE `on`/`off` (which never touches blinking at all) broke
+  the moment that extra write was added for blue too, so
+  `hdBayBlinkEn` is NOT a simple independent per-bit register the way
+  `hdBayReg1`/`hdBayReg2` are - writing it at all, for a bit position
+  (blue's) never confirmed to mean anything there, has a real side
+  effect. `wd-control-tool` now only touches `hdBayBlinkEn` for RED.
 - **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
   hardware has been available to test them, and the formula that
   would have predicted them was proven wrong for hd0/hd1, so

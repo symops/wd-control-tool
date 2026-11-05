@@ -231,6 +231,30 @@ func TestSet_HDBayRedBlinking_ThenOffAndOn_ActuallyExitsBlinkMode(t *testing.T) 
 	}
 }
 
+// Confirmed on real EX2 hardware: making the RED on/off fix above
+// (clearing hdBayBlinkEn's bit) unconditional for BOTH colors - the
+// original, untested assumption that writing an always-0 bit there
+// is harmless - broke plain BLUE `on`/`off`, which never touches
+// blinking at all. hdBayBlinkEn plainly isn't a simple independent
+// per-bit register the way hdBayReg1/hdBayReg2 are; writing it for a
+// bit position never confirmed to mean anything there (blue's) had a
+// real side effect. Plan must never touch hdBayBlinkEn for Blue.
+func TestPlan_HDBayBlueOnOff_NeverTouchesHDBayBlinkEn(t *testing.T) {
+	for _, zone := range []Zone{HD0, HD1} {
+		for _, state := range []State{On, Off} {
+			ws, err := Plan(zone, Blue, state)
+			if err != nil {
+				t.Fatalf("Plan(%v, Blue, %v): %v", zone, state, err)
+			}
+			for _, w := range ws {
+				if w.Addr == hdBayBlinkEn {
+					t.Errorf("Plan(%v, Blue, %v) touches hdBayBlinkEn: %+v", zone, state, ws)
+				}
+			}
+		}
+	}
+}
+
 // HD2/HD3 are EX4-only (EX2 only has hd0/hd1) and have no confirmed
 // register bit - the old "1<<(13+idx)" formula this replaced was
 // proven wrong for hd0/hd1, so it's not trusted for hd2/hd3 either.
