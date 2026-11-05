@@ -968,6 +968,32 @@ machine printing "now fuzzing with 8 workers" (down from the default
 fuzz FUZZTIME=5m` work exactly as before) - only how many CPUs it's
 willing to use while doing it.
 
+Even with that cap, the same symptom resurfaced once more at a longer
+`FUZZTIME=5m`: `FuzzParse_NeverPanicsAndRoundTrips` failed with
+`context deadline exceeded` at *exactly* 300.20s - 0.2s past the
+5-minute fuzztime, i.e. after the fuzzing itself had already
+completed its full run cleanly (`new interesting: 7`, no crasher file
+written anywhere, no actual failing input reported) - the failure was
+in the fuzz *coordinator's own worker-shutdown handshake*, not
+anything `Parse` did. `/proc/loadavg` at the time showed a 15-minute
+average of 32 on this 32-core box - this host runs other, unrelated
+background jobs alongside this project's own (several other projects'
+automated loops share it), so an 8-worker cap on THIS process doesn't
+guarantee the box as a whole isn't saturated by something else
+entirely. Re-running the exact same target/duration/CPU-cap in
+isolation moments later passed clean. **The confirming step that
+matters here**: before treating a `go test -fuzz` failure as a real
+bug, check whether the FAIL message names an actual panic/crasher
+(and a `Failing input written to testdata/fuzz/...` line) versus a
+bare `context deadline exceeded` with no such line - only the former
+is evidence of a bug in the code under test; the latter, especially
+landing within a fraction of a second of the fuzztime boundary, is
+this project's own tooling hitting a shutdown-phase timeout under
+host-wide contention this project's `Makefile` has no lever to fix
+(there's no public flag to extend the fuzz coordinator's own shutdown
+deadline) - re-run in isolation to tell the two apart rather than
+assuming either way.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.
