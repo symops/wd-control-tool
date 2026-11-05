@@ -25,7 +25,7 @@ disassembly of the specific handler or a live UART capture.
 | Board | SoC class | Fan | LED | RTC | Display |
 |---|---|---|---|---|---|
 | EX2 Ultra (EX2U) | Armada 385 (armv7) | MCU/UART | MCU/UART (status LED only; hd0/hd1 bay LEDs are plain kernel LED-class sysfs, out of scope) | not used by vendor `/init`, out of scope | none |
-| EX2 | Kirkwood-class (armv5 ABI today, armv7 silicon - see README) | direct `/dev/mem` register write | direct `/dev/mem` register write | MCU/UART (write side unconfirmed) | none |
+| EX2 | Kirkwood-class (armv5 ABI today, armv7 silicon - see README) | direct `/dev/mem` register write | direct `/dev/mem` register write | MCU/UART (write side confirmed) | none |
 | EX4 | Kirkwood-class (armv5 ABI) | MCU/UART | direct `/dev/mem` register write | MCU/UART (write side confirmed) | MCU/UART |
 
 ## Extraction method
