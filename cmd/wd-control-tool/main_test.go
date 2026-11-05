@@ -96,17 +96,18 @@ func TestRun_HelpDocumentsTempCommandCurrentBehavior(t *testing.T) {
 }
 
 // -h's led section claimed "blinking" works for every ex2/ex4 zone -
-// not true for EX2's hd0/hd1 BLUE specifically (no confirmed register
-// behavior, see pkg/led's hdBayBits/errHDBayBlinkingUnconfirmed) -
-// RED's own HD-bay blinking is confirmed, unlike blue's. Pin that the
-// caveat is actually documented.
+// not true for EX2's hd0/hd1, either color (no confirmed register
+// behavior, see pkg/led's hdBayBits/errHDBayBlinkingUnconfirmed - a
+// RED-only reg2-only write was briefly shipped and then reverted
+// after a real-hardware report showed it has no actual effect). Pin
+// that the caveat is actually documented.
 func TestRun_HelpDocumentsHDBayBlinkingCaveat(t *testing.T) {
 	code, out, _ := captureRun(t, []string{"-h"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q", code, out)
 	}
-	if !strings.Contains(out, "hd0/hd1 blue blinking has no confirmed register behavior") {
-		t.Errorf("-h output missing the HD-bay blue blinking caveat: out=%q", out)
+	if !strings.Contains(out, "hd0/hd1\n                    blinking (either color) has no confirmed register behavior") {
+		t.Errorf("-h output missing the HD-bay blinking caveat: out=%q", out)
 	}
 }
 

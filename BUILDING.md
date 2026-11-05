@@ -829,6 +829,35 @@ hd1) - BLUE's own HD-bay blinking frame remains exactly as
 unconfirmed as before and still errors, not assumed symmetric with
 red just because the mechanism rhymes.
 
+A sixteenth finding, and a correction to the fifteenth: the HD-bay
+RED "confirmation" above was wrong. On real hardware, `wd-control-tool
+-b ex2 -l hd0/hd1 red blinking` had no visible effect - the write
+this project shipped (set `hdBayReg2`'s bit, leave `hdBayReg1` alone)
+does not actually make the LED blink. Re-examining the original
+capture: "read `hdBayReg2` twice in a row and see it oscillate" is
+real evidence that the hardware blinks *when it's already blinking*,
+but it is NOT evidence that *writing* `hdBayReg2` is what *starts*
+blinking, and "`hdBayReg1` stayed constant throughout" only means it
+didn't change DURING that capture - if the bay was already left in
+some other state (e.g. still `on` from an earlier step in the same
+session, with `hdBayReg1`'s bit already at 1) before the blinking
+command ran, "constant" is consistent with `hdBayReg1` being
+irrelevant AND with it being required-and-already-satisfied; the
+capture couldn't distinguish those two. The real lesson: confirming
+what controls a STATE TRANSITION needs a diff between a known state
+(e.g. a confirmed `on`) and the claimed new state (`blinking`) across
+every register that might matter - not two reads taken seconds apart
+while already inside the state being investigated, however dramatic
+the "it changed with nothing in between" moment looks. This project
+reverted HD-bay blinking to erroring for both colors
+(`errHDBayBlinkingUnconfirmed`) pending a capture built that way: dump
+a wide register range (e.g. via `regdump range 0xSTART 0xEND`, an
+extended version of the earlier single-address helper) right after a
+confirmed `on`, dump it again right after switching to `blinking`,
+and diff the two dumps directly - whatever bit(s) differ between
+those two concrete states, and only those, are candidates for the
+real blink-enable control.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

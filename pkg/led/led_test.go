@@ -5,7 +5,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/symops/wd-control-tool/pkg/regio"
 	"github.com/symops/wd-control-tool/test/fakeregio"
 )
 
@@ -142,41 +141,21 @@ func TestSet_HDBayLED(t *testing.T) {
 	}
 }
 
-// No real capture has ever shown a "blinking" transition on HD-bay -
-// reported as an error rather than guessed (see Plan's doc comment).
-// Blue's HD-bay blinking frame remains unconfirmed (see Plan's own
-// doc comment) - RED's is now confirmed (see
-// TestPlan_HDBayRedBlinking) and must NOT land here.
-func TestPlan_HDBayBlueBlinkingUnconfirmed(t *testing.T) {
+// No real capture has ever shown a WORKING "blinking" transition on
+// HD-bay, for either color - reported as an error rather than
+// guessed (see Plan's doc comment). A reg2-only write was briefly
+// shipped for RED after a capture that looked like it confirmed the
+// EX4-style reg2-only mechanism, but a real-hardware report showed
+// it has no actual effect, so this reverted back to erroring for
+// both colors - see Plan's own HD-bay Blinking case for the full
+// story. Must NOT regress to asserting success for RED again without
+// a real hardware confirmation.
+func TestPlan_HDBayBlinkingUnconfirmed(t *testing.T) {
 	for _, zone := range []Zone{HD0, HD1} {
-		if _, err := Plan(zone, Blue, Blinking); err == nil {
-			t.Errorf("Plan(%v, Blue, Blinking): want error, got nil", zone)
-		}
-	}
-}
-
-// HD-bay red blinking - confirmed on real EX2 hardware via a live
-// register dump (hdBayReg1 unchanged throughout; hdBayReg2's own
-// hd0-red bit (21) observed oscillating between reads taken moments
-// apart with no command in between, a hardware blink generator, not
-// a software rewrite - see Plan's own HD-bay Blinking case). Confirms
-// the computed write targets ONLY hdBayReg2, never hdBayReg1.
-func TestPlan_HDBayRedBlinking(t *testing.T) {
-	cases := []struct {
-		zone Zone
-		bit  uint32
-	}{
-		{HD0, 1 << 21},
-		{HD1, 1 << 20},
-	}
-	for _, c := range cases {
-		ws, err := Plan(c.zone, Red, Blinking)
-		if err != nil {
-			t.Fatalf("Plan(%v, Red, Blinking): %v", c.zone, err)
-		}
-		want := []regio.Write{{Addr: hdBayReg2, Set: c.bit}}
-		if len(ws) != 1 || ws[0] != want[0] {
-			t.Errorf("Plan(%v, Red, Blinking) = %+v, want %+v", c.zone, ws, want)
+		for _, color := range []Color{Red, Blue} {
+			if _, err := Plan(zone, color, Blinking); err == nil {
+				t.Errorf("Plan(%v, %v, Blinking): want error, got nil", zone, color)
+			}
 		}
 	}
 }
