@@ -142,10 +142,12 @@ func TestSet_HDBayLED(t *testing.T) {
 	}
 }
 
-// BLUE's own HD-bay blinking frame has no confirmed register
-// behavior (no report either way) - reported as an error rather
-// than guessed (see Plan's doc comment). RED's is confirmed (see
-// TestPlan_HDBayRedBlinking) and must NOT land here.
+// BLUE's own HD-bay blinking is confirmed NOT to work (the vendor's
+// own `led hd0/hd1 blue blinking` was tested directly on real
+// hardware and doesn't work either) - reported as an error, not
+// assumed to someday match red (see Plan's doc comment). RED's is
+// confirmed working (see TestPlan_HDBayRedBlinking) and must NOT
+// land here.
 func TestPlan_HDBayBlueBlinkingUnconfirmed(t *testing.T) {
 	for _, zone := range []Zone{HD0, HD1} {
 		if _, err := Plan(zone, Blue, Blinking); err == nil {

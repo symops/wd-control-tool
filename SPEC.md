@@ -530,10 +530,11 @@ assumption:
   a known `on` baseline) wrongly concluded `hdBayReg2` itself was the
   control register; that write shipped briefly and had **no actual
   effect** on real hardware, and was reverted before this proper
-  capture replaced it. BLUE's own blinking frame is still unconfirmed
-  (no report either way) - `wd-control-tool` still reports it as an
-  error (`errHDBayBlinkingUnconfirmed`) rather than assuming it
-  matches red.
+  capture replaced it. BLUE's own HD-bay blinking is **confirmed NOT
+  to work** - the vendor's own `led hd0/hd1 blue blinking` was tested
+  directly on real hardware and doesn't work either, so this isn't a
+  gap to someday close by assuming it matches red. `wd-control-tool`
+  reports an error (`errHDBayBlueBlinkingNotSupportedEX2`).
 - **Leaving `hdBayBlinkEn`'s bit set breaks `on`/`off` entirely** -
   confirmed on real hardware: after a real `led hd0/hd1 red blinking`,
   `wd-control-tool`'s own `on`/`off` had **no effect at all**, because
@@ -1018,10 +1019,13 @@ itself (not just the vendor tool).
    follow-up capture - diffing a full register range between a known
    `on` state and the vendor's own `led hd0/hd1 red blinking`, across
    two independent real transitions - found the real control: a THIRD
-   register, `hdBayBlinkEn` (`0xF1018148`), one bit per bay. See
-   "HD-bay" above for the full story. BLUE's own HD-bay blinking
-   frame is still unconfirmed (no report either way) and remains an
-   error.
+   register, `hdBayBlinkEn` (`0xF1018148`), one bit per bay - and a
+   follow-up fix once `on`/`off` turned out to have no effect after a
+   real `blinking` (leaving `hdBayBlinkEn`'s bit set kept the hardware
+   blink generator overriding both registers; `on`/`off` now also
+   clear it). See "HD-bay" above for the full story. BLUE's own
+   HD-bay blinking is confirmed NOT to work (the vendor's own command
+   was tested directly on real hardware) and remains an error.
 
 ## Author
 

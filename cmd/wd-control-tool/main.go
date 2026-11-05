@@ -356,8 +356,8 @@ chained in one command, run in the order given:
 led's own arguments:
   ex2:       ZONE COLOR STATE   zones: power,hd0,hd1; colors: red,blue; states: on,off,blinking(blink)
                     blinking is confirmed for power (both colors) and hd0/hd1 red;
-                    hd0/hd1 blue blinking has no confirmed register behavior and
-                    reports an error rather than assuming it matches red
+                    hd0/hd1 blue blinking is confirmed NOT to work (the vendor's
+                    own tool doesn't support it either) and reports an error
   ex4:       ZONE COLOR STATE   zones: power,hd0,hd1,hd2,hd3; colors: red,blue; states: on,off,blinking(blink)
                     blue blinking on hd0..hd3 has no vendor implementation at all
                     (confirmed by decompilation) and reports an error; every other

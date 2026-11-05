@@ -17,18 +17,20 @@ func errHDBayZoneUnconfirmed(z Zone) error {
 	return fmt.Errorf("led: no confirmed register bit for HD-bay zone %v (EX2 only has hd0/hd1; hd2/hd3 are EX4-only and unconfirmed on real hardware)", z)
 }
 
-// errHDBayBlinkingUnconfirmed: no real capture has ever shown what
-// "blinking" does on HD-bay - see Plan's doc comment.
-func errHDBayBlinkingUnconfirmed(z Zone, c Color) error {
-	return fmt.Errorf("led: HD-bay blinking has no confirmed register behavior (zone=%v color=%v)", z, c)
+// errHDBayBlueBlinkingNotSupportedEX2: confirmed, not merely
+// unconfirmed - testing the vendor's own `led hd0/hd1 blue blinking`
+// directly on real EX2 hardware found it doesn't work either. See
+// Plan's own HD-bay Blinking case.
+func errHDBayBlueBlinkingNotSupportedEX2(z Zone) error {
+	return fmt.Errorf("led: EX2's own vendor tool has no working HD-bay blue blinking either (confirmed by testing the real vendor command on hardware, not just unconfirmed) (zone=%v)", z)
 }
 
-// errHDBayBlueBlinkingNotImplementedEX4: unlike errHDBayBlinkingUnconfirmed
-// above (no real capture exists either way), this one IS confirmed -
-// decompiling the real EX4 `led` binary's blue hd-bay handler
-// (FUN_0000ab20) found no "blinking" branch at all; it's a genuine
-// no-op in the vendor's own code, not a gap in this tool. See
-// EX4HDBayPlan and SPEC.md's "HD-bay".
+// errHDBayBlueBlinkingNotImplementedEX4: EX4's own confirmed-not-
+// supported counterpart to errHDBayBlueBlinkingNotSupportedEX2 above,
+// found a different way - decompiling the real EX4 `led` binary's
+// blue hd-bay handler (FUN_0000ab20) found no "blinking" branch at
+// all; it's a genuine no-op in the vendor's own code, not a gap in
+// this tool. See EX4HDBayPlan and SPEC.md's "HD-bay".
 func errHDBayBlueBlinkingNotImplementedEX4() error {
 	return fmt.Errorf("led: EX4's own vendor code has no HD-bay blue blinking at all (confirmed by decompilation, not just unconfirmed)")
 }

@@ -896,6 +896,20 @@ real-hardware test, re-run after the fix) to restore normal control.
 Clearing a bit that was never set (Blue, or Red that was never
 blinking) is a harmless no-op, so this needed no extra guard.
 
+One more status update, this time a downgrade rather than a new
+finding: HD-bay BLUE blinking (hd0/hd1) was carried as "unconfirmed,
+no report either way" throughout the above - genuinely ambiguous,
+since nobody had tried it. The user then tested the vendor's own
+`led hd0/hd1 blue blinking` directly on real EX2 hardware and
+confirmed it doesn't work either - not ambiguous anymore, just
+confirmed absent, the same status EX4's own blue hd-bay blinking
+already had from decompilation (see errHDBayBlueBlinkingNotImplementedEX4).
+`wd-control-tool` still reports an error either way, so no code
+behavior changed - only the error (`errHDBayBlueBlinkingNotSupportedEX2`,
+replacing the generic `errHDBayBlinkingUnconfirmed`, now dead code and
+removed) and every doc mention of this case were updated to say so
+plainly, instead of leaving a solved question looking open.
+
 ## What this does NOT cover
 
 This repository builds only the `wd-control-tool` binary itself.

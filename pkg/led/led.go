@@ -220,9 +220,10 @@ func colorBit(c Color) (uint32, uint32, error) {
 // register range across a known on->blinking transition (see
 // hdBayBlinkEn's doc comment for why this supersedes an earlier,
 // wrong reg2-based guess that had no real effect). BLUE's blinking
-// frame remains unconfirmed and is reported as an error
-// (errHDBayBlinkingUnconfirmed) rather than assumed symmetric with
-// red.
+// is CONFIRMED NOT TO WORK (the vendor's own `led hd0/hd1 blue
+// blinking` was tested directly on real hardware and doesn't work
+// either) and reports an error (errHDBayBlueBlinkingNotSupportedEX2)
+// rather than assumed symmetric with red.
 func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 	if zone == Power {
 		ownBit, otherBit, err := colorBit(color)
@@ -292,11 +293,14 @@ func Plan(zone Zone, color Color, state State) ([]regio.Write, error) {
 		// was 0 throughout yet blinking still worked), and hdBayReg2's
 		// changes were a side effect of the hardware blink generator
 		// actually driving the pin, not something this write needs to
-		// touch. BLUE's own blinking frame remains unconfirmed (no
-		// report either way) and is still reported as an error rather
-		// than assumed symmetric with red.
+		// touch. BLUE's own HD-bay blinking is CONFIRMED NOT TO WORK -
+		// unlike the "no report either way" ambiguity this used to
+		// have, the vendor's own `led hd0/hd1 blue blinking` was
+		// tested directly on real hardware and doesn't work either,
+		// so this isn't a gap in this tool to someday close by
+		// assuming it matches red - there is nothing there to match.
 		if color != Red {
-			return nil, errHDBayBlinkingUnconfirmed(zone, color)
+			return nil, errHDBayBlueBlinkingNotSupportedEX2(zone)
 		}
 		return []regio.Write{
 			{Addr: hdBayBlinkEn, Set: bit},
