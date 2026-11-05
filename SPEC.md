@@ -549,7 +549,13 @@ assumption:
   `hdBayBlinkEn` is NOT a simple independent per-bit register the way
   `hdBayReg1`/`hdBayReg2` are - writing it at all, for a bit position
   (blue's) never confirmed to mean anything there, has a real side
-  effect. `wd-control-tool` now only touches `hdBayBlinkEn` for RED.
+  effect. `wd-control-tool` now only touches `hdBayBlinkEn` for RED -
+  confirmed on real hardware to restore plain blue `on`/`off`, though
+  only after a full reboot: the bad write had left the hardware
+  itself latched in the broken state, not just ineffective while it
+  ran, and no amount of further register writes (with the bug already
+  fixed in code) brought it back without a power cycle. See
+  BUILDING.md for the full story.
 - **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
   hardware has been available to test them, and the formula that
   would have predicted them was proven wrong for hd0/hd1, so

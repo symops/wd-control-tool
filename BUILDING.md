@@ -925,10 +925,26 @@ nominally a no-op (0 staying 0). "Clearing a bit that's always 0 is
 harmless" is exactly the kind of unverified generalization this
 project's own house rule exists to catch, and it slipped through here
 because the fix was reasoned by symmetry from RED's confirmed case
-rather than tested for BLUE specifically before shipping. Fixed by restricting the `hdBayBlinkEn` clear to RED only - pending
-a real-hardware re-test of plain blue `on`/`off` to confirm this
-narrower fix actually restores it, the same way every other change
-in this section was confirmed rather than assumed.
+rather than tested for BLUE specifically before shipping. Fixed by
+restricting the `hdBayBlinkEn` clear to RED only.
+
+A real-hardware re-test of the narrowed fix added a sharp final
+twist: with the fix applied and freshly rebuilt (binary re-verified
+by `md5sum` to rule out a stale-binary false alarm), plain blue
+`on`/`off` **still** had no effect - until the board was rebooted,
+after which it worked again. So the bad write wasn't just
+ineffective while it was happening; it left the hardware itself
+latched in a bad state that persisted across every later `on`/`off`
+call (plain register re-writes couldn't clear it) and needed a full
+power cycle to recover. This is a materially different, and more
+expensive, kind of mistake than "the write had no effect" - a wrong
+write to an unconfirmed bit in this register didn't just fail
+silently, it broke something that stayed broken. The practical
+lesson for any future work anywhere near `hdBayBlinkEn` (or any
+register this project hasn't fully mapped): a failed experiment here
+may need a reboot to undo, not just a revert of the write that
+caused it - plan test sessions accordingly, and don't assume "I
+reverted the code" is the same as "the hardware is back to normal."
 
 ## What this does NOT cover
 
