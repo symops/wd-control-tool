@@ -116,7 +116,17 @@ func TestEX4ReadFanPulses_OverFakeRegio(t *testing.T) {
 	mem := fakeregio.New(t)
 
 	const toggles = 10
-	const toggleInterval = 5 * time.Millisecond
+	// 30ms, not the original 5ms - found flaky under `go test -race
+	// ./...` (not in isolation: 20/20 clean alone, but 2 failures in
+	// 5 full-suite runs, edges as low as 6) when other packages'
+	// tests compete for CPU at the same time. A 5ms margin per toggle
+	// leaves too little slack against ordinary scheduling jitter
+	// under that contention; 30ms gives the busy-poll loop in
+	// EX4ReadFanPulses enough room to not miss a toggle even when
+	// briefly descheduled. Verified 20/20 under `go test -race
+	// -count=1 ./...` (full suite, not just this test) before this
+	// change was trusted.
+	const toggleInterval = 30 * time.Millisecond
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
