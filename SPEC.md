@@ -24,7 +24,7 @@ disassembly of the specific handler or a live UART capture.
 
 | Board | SoC class | Fan | LED | RTC | Display |
 |---|---|---|---|---|---|
-| EX2 Ultra (EX2U) | Armada 385 (armv7) | MCU/UART | MCU/UART (status LED only; hd0/hd1 bay LEDs are plain kernel LED-class sysfs, out of scope) | not used by vendor `/init`, out of scope | none |
+| EX2 Ultra (EX2U) | Armada 385 (armv7) | MCU/UART | MCU/UART (status LED only; hd0/hd1 bay LEDs are plain kernel LED-class sysfs, out of scope) | `/dev/rtc0` kernel driver + `hwclock`, out of scope (not MCU-based - see "RTC" below) | none |
 | EX2 | Kirkwood-class (armv5 ABI today, armv7 silicon - see README) | direct `/dev/mem` register write | direct `/dev/mem` register write | MCU/UART (write side confirmed) | none |
 | EX4 | Kirkwood-class (armv5 ABI) | MCU/UART | direct `/dev/mem` register write | MCU/UART (write side confirmed) | MCU/UART |
 
@@ -106,10 +106,17 @@ against real hardware, not just statically).
 
 ## EX2/EX4 protocol ("legacy" MCU, `/dev/ttyS1`)
 
-Statically decoded only (not hardware-confirmed). Table-driven,
-`FA...FB` framed, **no checksum anywhere** (checked across every
-handler shape below). Richer than EX2U's: several frame shapes, and
-variable length for RTC-bulk-write and free text.
+Table-driven, `FA...FB` framed, **no checksum anywhere** (checked
+across every handler shape below). Richer than EX2U's: several frame
+shapes, and variable length for RTC-bulk-write and free text. The
+command *table itself* (byte layout, which b4/b5/b6/b7 values exist)
+was extracted statically from the real binary's `.data` section (see
+"Extraction method" above) - but by now most of what this tool
+actually *uses* from it (fan, LED, RTC, display, sleep - see each
+command's own subsection below) has been separately confirmed on real
+hardware too, not just read out of the table. Anything still resting
+on the static table alone is called out explicitly where it comes up
+(e.g. the unused, uninvestigated rows in "Unresolved").
 
 ### UART line settings
 
@@ -306,17 +313,21 @@ this tool deliberately does not reimplement or depend on:
 **Consequence for wd-control-tool**: almost every command in this
 tool is fire-and-forget, with no read-back or acknowledgement - a
 known, deliberate limitation, not an oversight (see "Unresolved").
-Three exceptions, all added later via a live capture rather than
+Four exceptions, all added later via a live capture rather than
 decoding the general mechanism above: EX2U's temperature (`-t`,
-"EX2U protocol"), EX2's fan RPM (`-f rpm`, "Fan status read-back")
-and EX2's RTC read (`-r r`/`-r s`, "RTC") - each decodes one specific
-reply shape, not the general reply-framing problem described above,
-which remains unsolved for everything else. The first two share
+"EX2U protocol"), EX2's fan RPM (`-f rpm`, "Fan status read-back"),
+and BOTH boards' RTC read (`-r r`/`-r s`, "RTC") - EX2's and EX4's
+`RDateAndTime` reply each decoded separately, since (as "RTC" above
+details) they turned out to differ from each other (EX4's doesn't
+echo its own request header, uses a different b7, and a different
+`dow` convention). Each of the four decodes one specific reply shape,
+not the general reply-framing problem described above, which remains
+unsolved for everything else. The temperature/fan-RPM pair share
 their own request's 7-byte shape; `RDateAndTime`'s reply instead
 shares `WDateAndTime`'s 13-byte shape (a *different* command's
-request frame, header echoed back verbatim) - the one case so far
-where a reply's shape wasn't simply "my own request, answer in byte
-5".
+request frame) - the one case so far where a reply's shape wasn't
+simply "my own request, answer in byte 5" (and, for EX4, not even
+that - see above).
 
 ## Fan control
 
