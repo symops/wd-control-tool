@@ -388,7 +388,7 @@ func TestMem_ReadReg32_NeverObservesATornValueDuringConcurrentWrites(t *testing.
 // and this test has no business touching real physical memory on
 // whatever host runs `go test`, only confirming Open's own open+wrap
 // logic. Requires CAP_SYS_RAWIO (root on this project's own build/CI
-// host, confirmed - see BUILDING.md); skip rather than fail on a host
+// host, confirmed - see HISTORY.md); skip rather than fail on a host
 // where /dev/mem isn't openable, since that's an environment fact,
 // not a bug in this package.
 func TestOpen_OpensRealDevMem(t *testing.T) {

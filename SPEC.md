@@ -566,7 +566,7 @@ assumption:
   itself latched in the broken state, not just ineffective while it
   ran, and no amount of further register writes (with the bug already
   fixed in code) brought it back without a power cycle. See
-  BUILDING.md for the full story.
+  HISTORY.md for the full story.
 - **hd2/hd3 (EX4-only) have no confirmed bits either** - no EX4
   hardware has been available to test them, and the formula that
   would have predicted them was proven wrong for hd0/hd1, so
@@ -910,7 +910,7 @@ vendor tool directly, not by reasoning about it.
   **not an MCU timing issue**: a fixed pre-request pause had zero
   measurable effect, and the real cause was a bug on this tool's own
   side (`Port.recvBytes`, `pkg/mcu/serial.go`, now fixed - see
-  BUILDING.md for the full story). `cmd/wd-control-tool/main.go`'s
+  HISTORY.md for the full story). `cmd/wd-control-tool/main.go`'s
   `buildRTCReadAction` also retries a decode failure a few times
   (shared by both boards) as defense in depth, since this protocol
   still has no checksum or acknowledgement either way.
@@ -920,7 +920,7 @@ vendor tool directly, not by reasoning about it.
   capture needed. The clock-setting side effect itself is real and
   hardware/OS-affecting, so (unlike every other confirmed behavior in
   this spec) it is deliberately **not** exercised by this project's
-  own automated tests - see BUILDING.md.
+  own automated tests - see HISTORY.md.
 
 ## Display (EX4 only)
 

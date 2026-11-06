@@ -85,7 +85,7 @@ FUZZTIME := 30s
 # CPUs) - fine on a dedicated machine, but this project's own fuzz
 # rounds run as a long background loop alongside other work on a
 # shared box, where that starves everything else and (confirmed once
-# already - see BUILDING.md) can even make an unrelated fuzz target
+# already - see HISTORY.md) can even make an unrelated fuzz target
 # spuriously fail with "context deadline exceeded" under contention.
 # Capped at 25% of nproc (minimum 1) via GOMAXPROCS, not -parallel:
 # -parallel only bounds the *fuzzing engine's* worker count, while

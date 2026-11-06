@@ -26,7 +26,7 @@ import (
 // error" cases) points --serial at a path that cannot possibly exist,
 // so mcu.Open fails cleanly before touching anything. No test here
 // calls regio.Open() on a real /dev/mem - that's intentionally left
-// untested by automation; see BUILDING.md.
+// untested by automation; see HISTORY.md.
 func captureRun(t *testing.T, args []string) (code int, stdout, stderr string) {
 	t.Helper()
 
@@ -851,7 +851,7 @@ func TestRun_DryRun_RTCReadAndSync_EX2(t *testing.T) {
 // "r" is exercised with a real reply here - "s" shares this same
 // decode path up to the print, then additionally calls
 // rtc.SetSystemTime for real, which this project's own tests
-// deliberately never do (see BUILDING.md) - so "s"'s no-reply/
+// deliberately never do (see HISTORY.md) - so "s"'s no-reply/
 // decode-failure branches are tested below instead, never its full
 // success path.
 func TestRun_RealRun_RTCRead_DecodesRealCapturedReply(t *testing.T) {
@@ -2603,7 +2603,7 @@ func TestRun_AllFourActionTypesChained(t *testing.T) {
 // EX4's fan/display/rtc actions all go over the MCU/UART path, which
 // --serial lets a test redirect to a fakemcu pty; EX4's led action
 // goes over real /dev/mem instead (no CLI override exists for that -
-// see BUILDING.md on why no automated test does real register I/O
+// see HISTORY.md on why no automated test does real register I/O
 // against /dev/mem), so led is intentionally left out of this
 // real-run chain.
 func TestRun_RealRun_MultipleValidActionsAllApplyCorrectlyInOrder(t *testing.T) {

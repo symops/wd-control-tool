@@ -224,7 +224,7 @@ func EX2DateTimeFrame(year, mon, dom, dow, hour, min, sec int) ([]byte, error) {
 // ex2RTCVerifyAttempts/ex2RTCVerifyReadTimeout: SetDateAndTime
 // write-then-verify loop.
 //
-// Hardware-confirmed root cause (see BUILDING.md): a RDateAndTime
+// Hardware-confirmed root cause (see HISTORY.md): a RDateAndTime
 // read immediately following a WDateAndTime write can come back with
 // sec/min right (read live off the RTC chip every time) but
 // hour/dow/dom/mon/year FROZEN at a stale snapshot - confirmed by a

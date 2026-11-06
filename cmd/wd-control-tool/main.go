@@ -986,7 +986,7 @@ func buildRTCReadAction(b board.Board, serialPath string, debug, sync bool) (*ac
 			// whatever's already buffered. Reused as-is for EX4 - this
 			// is defense against a genuine decode failure (garbled/no
 			// reply), not specific to EX2's own now-understood-and-
-			// fixed write-then-read corruption (see BUILDING.md), so
+			// fixed write-then-read corruption (see HISTORY.md), so
 			// there's no reason it wouldn't also help EX4.
 			var reply []byte
 			var year, mon, dom, hour, min, sec int

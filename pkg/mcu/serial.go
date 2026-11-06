@@ -12,7 +12,7 @@ import (
 
 // mcuTrace and traceEvent: DIAGNOSTIC ONLY, not a permanent feature.
 // Gated behind WD_MCU_TRACE so normal runs pay nothing. Added for the
-// EX2 RTC write-then-read corruption investigation (see BUILDING.md):
+// EX2 RTC write-then-read corruption investigation (see HISTORY.md):
 // wrapping the whole CLI in strace to capture the wire traffic around
 // a real failure made the failure stop reproducing (strace's own
 // per-syscall overhead), so this logs each actual write()/read() this

@@ -34,7 +34,7 @@ const (
 // A WD_LEGACY_BYTE_DELAY_US override (up to 1000x this value, i.e.
 // 10ms/byte on a 13-byte frame) was tried here as a diagnostic for
 // the EX2 RTC write-then-read corruption investigation and had zero
-// effect on the failure rate - see BUILDING.md and pkg/mcu/ex2.go's
+// effect on the failure rate - see HISTORY.md and pkg/mcu/ex2.go's
 // ex2RTCVerifyAttempts for the real root cause this turned out to be
 // (an MCU-firmware bug, not a transport timing issue) and the actual
 // fix. Removed rather than left in place doing nothing.
