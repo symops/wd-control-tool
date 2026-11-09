@@ -34,3 +34,11 @@ func errHDBayBlueBlinkingNotSupportedEX2(z Zone) error {
 func errHDBayBlueBlinkingNotImplementedEX4() error {
 	return fmt.Errorf("led: EX4's own vendor code has no HD-bay blue blinking at all (confirmed by decompilation, not just unconfirmed)")
 }
+
+// errEX2UHDBayBlinkingNotSupported: EX2U's hd0/hd1 bay LEDs are
+// plain Linux LED-class devices, confirmed on/off only (a brightness
+// file write) - no blink "trigger" file was given or tested, so
+// blinking is reported as an error rather than assumed to exist.
+func errEX2UHDBayBlinkingNotSupported(z Zone, c Color) error {
+	return fmt.Errorf("led: EX2U's hd-bay LEDs have no confirmed blinking mechanism (sysfs trigger unverified) (zone=%v color=%v)", z, c)
+}

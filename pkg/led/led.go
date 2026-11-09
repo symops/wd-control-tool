@@ -28,9 +28,13 @@
 // working red branch too - this package was already right to expose
 // it). See SPEC.md's "Power LED" for the full decompiled evidence.
 //
-// EX2U's LED (a single MCU-driven status LED, plus plain
-// kernel-LED-class hd0/hd1 bay LEDs that are out of scope for this
-// tool) is handled separately via pkg/mcu's EX2U client, not here.
+// EX2U's own single status LED is MCU-driven, handled separately via
+// pkg/mcu's EX2U client, not here. EX2U's hd0/hd1 bay LEDs ARE
+// handled here (ex2u_hdbay.go), despite the rest of this package
+// being /dev/mem-only - they are plain Linux LED-class devices, a
+// confirmed sysfs path rather than a register to reverse-engineer,
+// kept in this package because they share its Zone/Color vocabulary
+// and CLI zone naming, not because they share its mechanism.
 package led
 
 import "github.com/symops/wd-control-tool/pkg/regio"

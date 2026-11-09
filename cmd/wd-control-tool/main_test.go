@@ -1854,6 +1854,22 @@ func TestRun_LedBeforeBoard_EX2U_SingleArgArity(t *testing.T) {
 	}
 }
 
+// Same hint-pass scenario as TestRun_LedBeforeBoard_EX2U_SingleArgArity,
+// but for EX2U's OTHER led arity: "-l hd0 blue on" (three tokens, the
+// hd-bay sysfs form - see arityFor's own doc comment) occurring
+// before "-b" must still skip exactly 3 tokens, not 1, or the real
+// -b/--board scan below would misjudge where "-b" actually is and
+// either miss it entirely or swallow the wrong token as its value.
+func TestRun_LedBeforeBoard_EX2U_HDBayArgArity(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-l", "hd0", "blue", "on", "-b", "ex2u", "-n"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "hd-bay LED hd0 blue on") {
+		t.Errorf("out=%q, want the hd-bay led action described", out)
+	}
+}
+
 // A stronger variant of the above: TWO EX2U led actions chained
 // before the board flag, plus a fan action for good measure -
 // confirms the hint pass's "board not yet known at THIS point in
@@ -2120,20 +2136,29 @@ func TestArityFor(t *testing.T) {
 	cases := []struct {
 		mode string
 		b    board.Board
+		peek string
 		want int
 	}{
-		{"fan", board.EX2U, 1}, {"fan", board.EX2, 1}, {"fan", board.EX4, 1},
-		{"display", board.EX4, 1},
-		{"rtc", board.EX4, 1},
-		{"led", board.EX2U, 1},
-		{"led", board.EX2, 3},
-		{"led", board.EX4, 3},
-		{"temp", board.EX2U, 0},
-		{"sleep", board.EX4, 1},
+		{"fan", board.EX2U, "", 1}, {"fan", board.EX2, "", 1}, {"fan", board.EX4, "", 1},
+		{"display", board.EX4, "", 1},
+		{"rtc", board.EX4, "", 1},
+		{"led", board.EX2U, "", 1},
+		{"led", board.EX2U, "on", 1},
+		{"led", board.EX2U, "breathing", 1},
+		// EX2U's hd0/hd1 bay LEDs (plain Linux LED-class sysfs) use the
+		// same three-word zone/color/state form EX2/EX4 use - decided
+		// from peek alone, since board.EX2U would otherwise always mean
+		// arity 1 (see arityFor's own doc comment).
+		{"led", board.EX2U, "hd0", 3},
+		{"led", board.EX2U, "hd1", 3},
+		{"led", board.EX2, "", 3},
+		{"led", board.EX4, "", 3},
+		{"temp", board.EX2U, "", 0},
+		{"sleep", board.EX4, "", 1},
 	}
 	for _, c := range cases {
-		if got := arityFor(c.mode, c.b); got != c.want {
-			t.Errorf("arityFor(%q, %v) = %d, want %d", c.mode, c.b, got, c.want)
+		if got := arityFor(c.mode, c.b, c.peek); got != c.want {
+			t.Errorf("arityFor(%q, %v, %q) = %d, want %d", c.mode, c.b, c.peek, got, c.want)
 		}
 	}
 }
@@ -2145,7 +2170,7 @@ func TestArityFor(t *testing.T) {
 // only ever called when that's non-empty. Closes the matching gap
 // for arityFor's own defensive branch, same as those three.
 func TestArityFor_UnknownModeReturnsZero(t *testing.T) {
-	if got := arityFor("bogus", board.EX4); got != 0 {
+	if got := arityFor("bogus", board.EX4, ""); got != 0 {
 		t.Errorf("arityFor(%q, ...) = %d, want 0", "bogus", got)
 	}
 }
@@ -2692,6 +2717,87 @@ func TestRun_RealRun_EX2PowerLed_SendsCorrectFramesForEachCase(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("%s %s: wire bytes = % X, want % X", c.color, c.state, got, want)
 		}
+	}
+}
+
+// EX2U's hd0/hd1 bay LEDs - plain Linux LED-class sysfs (see
+// pkg/led/ex2u_hdbay.go), CONFIRMED on real EX2U hardware (the
+// user's own working `echo 1 > /sys/class/leds/wdmcex2u:...` shell
+// commands this was built from). Dry-run/debug only: the real write
+// path (led.EX2UHDBaySysfsBase, hardcoded to the real
+// /sys/class/leds, no CLI override like --serial gives the MCU
+// paths) can't be exercised here without root and the real sysfs
+// tree - same excluded category as every other real-hardware apply()
+// success path in this project (see HISTORY.md). The actual write
+// bytes/path are tested directly in pkg/led against a temp
+// directory.
+func TestRun_DryRun_EX2UHDBayLed(t *testing.T) {
+	cases := []struct {
+		args     []string
+		wantPath string
+		wantVal  string
+	}{
+		{[]string{"hd0", "blue", "on"}, "wdmcex2u:blue:hdd1", `"1"`},
+		{[]string{"hd0", "red", "off"}, "wdmcex2u:red:hdd1", `"0"`},
+		{[]string{"hd1", "blue", "on"}, "wdmcex2u:blue:hdd2", `"1"`},
+		{[]string{"hd1", "red", "off"}, "wdmcex2u:red:hdd2", `"0"`},
+	}
+	for _, c := range cases {
+		args := append([]string{"-b", "ex2u", "-n", "-D", "-l"}, c.args...)
+		code, out, _ := captureRun(t, args)
+		if code != exitOK {
+			t.Fatalf("args=%v: code=%d out=%q", c.args, code, out)
+		}
+		if !strings.Contains(out, "/sys/class/leds") {
+			t.Errorf("args=%v: out=%q, want it to mention /sys/class/leds", c.args, out)
+		}
+		if !strings.Contains(out, c.wantPath) {
+			t.Errorf("args=%v: out=%q, want it to mention %q", c.args, out, c.wantPath)
+		}
+		if !strings.Contains(out, c.wantVal) {
+			t.Errorf("args=%v: out=%q, want it to write %s", c.args, out, c.wantVal)
+		}
+		if strings.Contains(out, "MCU") || strings.Contains(out, "/dev/mem") {
+			t.Errorf("args=%v: out=%q, hd-bay LEDs must not be routed through the MCU or /dev/mem", c.args, out)
+		}
+	}
+}
+
+// EX2U's own status LED ("-l on") and its hd-bay LEDs ("-l hd0 ...")
+// share the same "-l"/"--led" flag but a different arity, decided
+// from the very next token alone (see arityFor's own doc comment) -
+// confirms the dispatch actually tells them apart rather than one
+// shadowing the other.
+func TestRun_DryRun_EX2U_LedStatusVsHDBay_DispatchCorrectly(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-l", "on"})
+	if code != exitOK {
+		t.Fatalf("status LED: code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "MCU") {
+		t.Errorf("status LED: out=%q, want it routed through the MCU", out)
+	}
+	if strings.Contains(out, "/sys/class/leds") {
+		t.Errorf("status LED: out=%q, must not mention /sys/class/leds", out)
+	}
+
+	code, out, _ = captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-l", "hd0", "red", "on"})
+	if code != exitOK {
+		t.Fatalf("hd-bay: code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "/sys/class/leds") {
+		t.Errorf("hd-bay: out=%q, want it routed through sysfs", out)
+	}
+}
+
+// Only On/Off are confirmed for EX2U's hd-bay LEDs - Blinking has no
+// confirmed sysfs trigger and must report an error, not a guess.
+func TestRun_EX2UHDBayLed_RejectsBlinking(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-l", "hd0", "red", "blinking"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "would fail") {
+		t.Errorf("out=%q, want a \"would fail\" line for the unconfirmed blink", out)
 	}
 }
 

@@ -24,7 +24,7 @@ disassembly of the specific handler or a live UART capture.
 
 | Board | SoC class | Fan | LED | RTC | Display |
 |---|---|---|---|---|---|
-| EX2 Ultra (EX2U) | Armada 385 (armv7) | MCU/UART | MCU/UART (status LED only; hd0/hd1 bay LEDs are plain kernel LED-class sysfs, out of scope) | `/dev/rtc0` kernel driver + `hwclock`, out of scope (not MCU-based - see "RTC" below) | none |
+| EX2 Ultra (EX2U) | Armada 385 (armv7) | MCU/UART | MCU/UART (status LED) + plain Linux LED-class sysfs (hd0/hd1 bay LEDs, on/off only - see "LED (EX2U hd-bay)") | `/dev/rtc0` kernel driver + `hwclock`, out of scope (not MCU-based - see "RTC" below) | none |
 | EX2 | Kirkwood-class (armv5 ABI today, armv7 silicon - see README) | direct `/dev/mem` register write | direct `/dev/mem` register write | MCU/UART (write side confirmed) | none |
 | EX4 | Kirkwood-class (armv5 ABI) | MCU/UART | direct `/dev/mem` register write | MCU/UART (write side confirmed) | MCU/UART |
 
@@ -753,6 +753,51 @@ EX4's own `led -h` text only documents `power blue on/off/blinking`
 the opposite
 bit) - `wd-control-tool` was already right to expose red for EX4 too,
 this was just never confirmed until now.
+
+## LED (EX2U hd-bay) - plain Linux LED-class sysfs, not MCU/UART
+
+EX2U's hd0/hd1 bay LEDs are a different mechanism from everything
+else this section covers: a real kernel driver already exposes them
+as standard Linux LED-class devices, so there is no protocol or
+register to reverse-engineer here, only the right sysfs paths -
+**CONFIRMED** from the user's own working shell commands, not a
+decompile or a capture:
+
+```sh
+echo 1 > /sys/class/leds/wdmcex2u:blue:hdd1/brightness
+echo 1 > /sys/class/leds/wdmcex2u:blue:hdd2/brightness
+echo 1 > /sys/class/leds/wdmcex2u:red:hdd1/brightness
+echo 1 > /sys/class/leds/wdmcex2u:red:hdd2/brightness
+```
+
+(and the identical four paths with `echo 0` for off). `0`/`1` to each
+device's own `brightness` file is the whole mechanism - no
+PROTOCOL/`FA...FB` framing, no `/dev/mem` register, and (unlike
+EX2U's own status LED) no `/dev/ttyS1` MCU traffic at all.
+
+- **Naming**: `wdmcex2u:<color>:hdd<N>`, where `<N>` is **1-indexed**
+  (`hdd1`/`hdd2`) - the device's own kernel-driver naming, NOT this
+  tool's 0-indexed `hd0`/`hd1` CLI zone naming (`hd0` -> `hdd1`, `hd1`
+  -> `hdd2`). See `pkg/led/ex2u_hdbay.go`'s `ex2uHDBayLEDNames`.
+- **Only on/off is confirmed.** The commands above never touched a
+  blink "trigger" file (Linux LED-class devices support one, e.g. a
+  `timer` trigger, but nothing confirms EX2U's own driver exposes or
+  behaves correctly with one), so `wd-control-tool` reports `blinking`
+  as an error for these two zones rather than assuming a trigger
+  exists and guessing its name.
+- **No `power` zone, no hd2/hd3** in this scheme - EX2U's power LED
+  is still the single MCU-driven status LED (`-l on/off/blinking/
+  breathing`, no zone/color), and EX2U physically has only two bays.
+- The CLI tells the two `-l`/`--led` forms on EX2U apart from the very
+  next token alone, before any real validation: `hd0`/`hd1` selects
+  the three-word `ZONE COLOR STATE` form below; anything else selects
+  the one-word status-LED `STATE` form above (see `arityFor`'s own
+  doc comment in `cmd/wd-control-tool/main.go`).
+
+| Command | Effect |
+|---|---|
+| `wd-control-tool -b ex2u -l hd0 blue on` | writes `1` to `.../wdmcex2u:blue:hdd1/brightness` |
+| `wd-control-tool -b ex2u -l hd1 red off` | writes `0` to `.../wdmcex2u:red:hdd2/brightness` |
 
 ## RTC (EX2/EX4)
 

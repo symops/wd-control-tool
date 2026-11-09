@@ -76,16 +76,26 @@ func modeNameFor(flag string) string {
 // arityFor is how many of the following command-line tokens a mode
 // flag consumes as its own arguments, verbatim, regardless of what
 // they look like (so e.g. a display text starting with "-" is never
-// mistaken for a flag). led's arity depends on the board: EX2U's
-// status LED takes one STATE word, EX2/EX4's zone/color/state scheme
-// takes three. temp takes no arguments at all - it just requests and
-// prints the decoded temperature (see buildTempAction).
-func arityFor(mode string, b board.Board) int {
+// mistaken for a flag). led's arity depends on the board, and on
+// EX2U additionally on peek (the very next token, or "" if there
+// isn't one): EX2U's own status LED takes one STATE word, but EX2U's
+// hd0/hd1 bay LEDs (plain Linux LED-class sysfs - see
+// pkg/led/ex2u_hdbay.go) use the same three-word zone/color/state
+// scheme EX2/EX4 use, so arity must be decided from peek alone, before
+// any real parsing - "hd0"/"hd1" means the three-word form, anything
+// else (on/off/blinking/blink/breathing/breathe, or garbage that will
+// fail validation later) means the one-word status-LED form. EX2/EX4
+// always take three. temp takes no arguments at all - it just
+// requests and prints the decoded temperature (see buildTempAction).
+func arityFor(mode string, b board.Board, peek string) int {
 	switch mode {
 	case "fan", "display", "rtc", "sleep":
 		return 1
 	case "led":
 		if b == board.EX2U {
+			if peek == "hd0" || peek == "hd1" {
+				return 3
+			}
 			return 1
 		}
 		return 3
@@ -219,11 +229,11 @@ func parseArgs(args []string) (*options, error) {
 			if opts.board == "" {
 				b = hintBoard
 			}
-			n := 3
-			if b == board.EX2U {
-				n = 1
+			peek := ""
+			if i+1 < len(args) {
+				peek = args[i+1]
 			}
-			i += n
+			i += arityFor("led", b, peek)
 		}
 	}
 
@@ -259,7 +269,11 @@ func parseArgs(args []string) (*options, error) {
 				return nil, fmt.Errorf("-b/--board is required (to use %s)", a)
 			}
 			mode := modeNameFor(a)
-			n := arityFor(mode, opts.boardValue)
+			peek := ""
+			if i+1 < len(args) {
+				peek = args[i+1]
+			}
+			n := arityFor(mode, opts.boardValue, peek)
 			start, end := i+1, i+1+n
 			if end > len(args) {
 				return nil, fmt.Errorf("%s requires %d argument(s)", a, n)
@@ -362,7 +376,10 @@ led's own arguments:
                     blue blinking on hd0..hd3 has no vendor implementation at all
                     (confirmed by decompilation) and reports an error; every other
                     zone/color/state combination is hardware-confirmed - see SPEC.md
-  ex2u:      STATE              states: on,off,blinking(blink),breathing(breathe)
+  ex2u:      STATE              status LED - states: on,off,blinking(blink),breathing(breathe)
+  ex2u:      hd0|hd1 COLOR STATE   hd-bay LEDs (plain Linux LED-class sysfs, not MCU-driven) -
+                    colors: red,blue; states: on,off only - blinking has no confirmed
+                    sysfs trigger and reports an error rather than assuming one exists
 
 Modifiers (may appear anywhere, apply to every action in the command):
   -n, --dry-run   print what would be done, touch no hardware; exits 0 even if the real run would fail
@@ -632,6 +649,13 @@ func buildEX4FanRPMAction() (*action, int) {
 
 func buildLEDAction(b board.Board, serialPath string, args []string) (*action, int) {
 	if b == board.EX2U {
+		// args has length 3 only when arityFor already recognized
+		// args[0] as "hd0"/"hd1" (see arityFor's own doc comment) -
+		// EX2U's hd0/hd1 bay LEDs, plain Linux LED-class sysfs, not
+		// the MCU-driven status LED below.
+		if len(args) == 3 {
+			return buildEX2UHDBayLEDAction(args[0], args[1], args[2])
+		}
 		state := args[0]
 		frame, ferr := mcu.EX2ULEDFrame(state)
 		return &action{
@@ -763,6 +787,43 @@ func buildEX2PowerLEDAction(serialPath, colorArg, stateArg string) (*action, int
 			}
 			defer p.Close()
 			return mcu.NewEX2(p).PowerLED(color.String(), stateVal.String())
+		},
+	}, exitOK
+}
+
+// buildEX2UHDBayLEDAction: EX2U's hd0/hd1 bay LEDs, dispatched here
+// by arityFor/buildLEDAction recognizing args[0] as "hd0"/"hd1" -
+// plain Linux LED-class sysfs (see pkg/led/ex2u_hdbay.go), not the
+// MCU-driven status LED buildLEDAction otherwise builds for EX2U.
+// zoneArg is always exactly "hd0" or "hd1" here: that is the only
+// peek arityFor ever sizes this action's args at 3 for (see
+// arityFor's own doc comment) - EX2U has no "power" zone in this
+// scheme (that's the status LED, reached via the one-word form
+// instead) and no hd2/hd3, so parseZone can't fail or return
+// anything else reachable through this path.
+func buildEX2UHDBayLEDAction(zoneArg, colorArg, stateArg string) (*action, int) {
+	zone, zerr := parseZone(zoneArg)
+	color, cerr := parseColor(colorArg)
+	stateVal, serr := parseState(stateArg)
+	err := zerr
+	if err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = serr
+	}
+
+	var name string
+	if err == nil {
+		name, err = led.EX2UHDBayPlan(zone, color, stateVal)
+	}
+
+	return &action{
+		describe:   fmt.Sprintf("set EX2U hd-bay LED %s %s %s via sysfs", zoneArg, colorArg, stateArg),
+		debugLines: sysfsDebugLines(err, name, stateVal),
+		planErr:    err,
+		apply: func() error {
+			return led.EX2UHDBaySet(led.EX2UHDBaySysfsBase, zone, color, stateVal)
 		},
 	}, exitOK
 }
@@ -1115,6 +1176,23 @@ func regWriteDebugLines(planErr error, ws []regio.Write) []string {
 		lines = append(lines, fmt.Sprintf("/dev/mem 0x%x: set=0x%08x clear=0x%08x", w.Addr, w.Set, w.Clear))
 	}
 	return lines
+}
+
+// sysfsDebugLines: EX2U's hd-bay LEDs' own -D output (see
+// buildEX2UHDBayLEDAction) - state is already known to be On/Off by
+// the time this is called (EX2UHDBayPlan rejects anything else, so
+// planErr would be non-nil and this wouldn't be reached).
+func sysfsDebugLines(planErr error, ledName string, state led.State) []string {
+	if planErr != nil {
+		return nil
+	}
+	value := "0"
+	if state == led.On {
+		value = "1"
+	}
+	return []string{
+		fmt.Sprintf("%s/%s/brightness: write %q", led.EX2UHDBaySysfsBase, ledName, value),
+	}
 }
 
 func parseZone(s string) (led.Zone, error) {
