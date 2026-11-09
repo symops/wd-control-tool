@@ -78,25 +78,31 @@ func modeNameFor(flag string) string {
 // they look like (so e.g. a display text starting with "-" is never
 // mistaken for a flag). led's arity depends on the board, and on
 // EX2U additionally on peek (the very next token, or "" if there
-// isn't one): EX2U's own status LED takes one STATE word, but EX2U's
-// hd0/hd1 bay LEDs (plain Linux LED-class sysfs - see
-// pkg/led/ex2u_hdbay.go) use the same three-word zone/color/state
-// scheme EX2/EX4 use, so arity must be decided from peek alone, before
-// any real parsing - "hd0"/"hd1" means the three-word form, anything
-// else (on/off/blinking/blink/breathing/breathe, or garbage that will
-// fail validation later) means the one-word status-LED form. EX2/EX4
-// always take three. temp takes no arguments at all - it just
-// requests and prints the decoded temperature (see buildTempAction).
+// isn't one): EX2U always takes a zone word first, like EX2/EX4 -
+// "power" (its single MCU-driven status LED, no color - "power
+// STATE", two words) or "hd0"/"hd1" (its hd-bay LEDs, plain Linux
+// LED-class sysfs - see pkg/led/ex2u_hdbay.go - "hd0/hd1 COLOR
+// STATE", three words, same shape EX2/EX4 use). Anything else for
+// peek defaults to one word, just enough to let that one bad token
+// fail validation on its own with a clear "unknown zone" error,
+// rather than guessing how many more tokens a typo might have meant
+// to consume. EX2/EX4 always take three. temp takes no arguments at
+// all - it just requests and prints the decoded temperature (see
+// buildTempAction).
 func arityFor(mode string, b board.Board, peek string) int {
 	switch mode {
 	case "fan", "display", "rtc", "sleep":
 		return 1
 	case "led":
 		if b == board.EX2U {
-			if peek == "hd0" || peek == "hd1" {
+			switch peek {
+			case "hd0", "hd1":
 				return 3
+			case "power":
+				return 2
+			default:
+				return 1
 			}
-			return 1
 		}
 		return 3
 	case "temp":
@@ -376,7 +382,7 @@ led's own arguments:
                     blue blinking on hd0..hd3 has no vendor implementation at all
                     (confirmed by decompilation) and reports an error; every other
                     zone/color/state combination is hardware-confirmed - see SPEC.md
-  ex2u:      STATE              status LED - states: on,off,blinking(blink),breathing(breathe)
+  ex2u:      power STATE           status LED (MCU-driven, no color) - states: on,off,blinking(blink),breathing(breathe)
   ex2u:      hd0|hd1 COLOR STATE   hd-bay LEDs (plain Linux LED-class sysfs, not MCU-driven) -
                     colors: red,blue; states: on,off only - blinking has no confirmed
                     sysfs trigger and reports an error rather than assuming one exists
@@ -387,10 +393,29 @@ Modifiers (may appear anywhere, apply to every action in the command):
   --serial PATH   MCU serial device (default /dev/ttyS1 - confirmed on real hardware for EX2/EX4 and EX2U)
 
 Examples:
-  wd-control-tool -b ex2 -f 3
+  wd-control-tool -b ex2u -f 50                        # 50% duty cycle
+  wd-control-tool -b ex2u -l power on                  # status LED on
+  wd-control-tool -b ex2u -l power blinking            # status LED blinking
+  wd-control-tool -b ex2u -l power breathing           # status LED breathing
+  wd-control-tool -b ex2u -l hd0 blue on               # hd-bay LED (sysfs)
+  wd-control-tool -b ex2u -t                           # read temperature
+
+  wd-control-tool -b ex2 -f 3                          # fixed RPM step
+  wd-control-tool -b ex2 -f rpm                        # read back fan RPM
+  wd-control-tool -b ex2 --led power blue on
+  wd-control-tool -b ex2 --led hd0 red blinking
+  wd-control-tool -b ex2 -r w                          # push host time to RTC
+  wd-control-tool -b ex2 -r s                          # read RTC, set host clock
+
+  wd-control-tool -b ex4 -f 2                          # Medium
+  wd-control-tool -b ex4 --led power blue on
+  wd-control-tool -b ex4 --led hd0 red blinking
   wd-control-tool -b ex4 --display "Booting..."
-  wd-control-tool -b ex2 --led power blue on -f 1
-  wd-control-tool -b ex4 --sleep on
+  wd-control-tool -b ex4 --sleep on                    # LCD to sleep
+  wd-control-tool -b ex4 -r r                          # read RTC
+
+  wd-control-tool -b ex2 --led power blue on -f 1      # chain several actions
+  wd-control-tool -b ex4 -n -D --led power blue on     # preview, touch nothing
 
 Exit codes: 0 ok, 1 usage/argument error, 2 not supported on this board, 3 hardware I/O error.
 
@@ -656,10 +681,27 @@ func buildLEDAction(b board.Board, serialPath string, args []string) (*action, i
 		if len(args) == 3 {
 			return buildEX2UHDBayLEDAction(args[0], args[1], args[2])
 		}
-		state := args[0]
+		// args has length 1 only when arityFor's peek matched neither
+		// "power" nor "hd0"/"hd1" - a bad or missing zone word,
+		// reported as a plan error (so -n still reports "would fail"
+		// cleanly) rather than guessed at.
+		if len(args) == 1 {
+			err := fmt.Errorf("EX2U's led needs a zone: power, hd0 or hd1 (got %q)", args[0])
+			return &action{
+				describe: fmt.Sprintf("send led %s to EX2U MCU (%s)", args[0], serialPath),
+				planErr:  err,
+			}, exitOK
+		}
+		// len(args) == 2, and args[0] is always exactly "power" - the
+		// only peek value arityFor ever sizes this at 2 for (see
+		// arityFor's own doc comment). EX2U's single MCU-driven status
+		// LED, no color - "power STATE", matching EX2/EX4's own "power
+		// COLOR STATE" zone word for consistency, minus the color this
+		// one LED doesn't have.
+		state := args[1]
 		frame, ferr := mcu.EX2ULEDFrame(state)
 		return &action{
-			describe:   fmt.Sprintf("send led %s to EX2U MCU (%s)", state, serialPath),
+			describe:   fmt.Sprintf("send led power %s to EX2U MCU (%s)", state, serialPath),
 			debugLines: frameDebugLines(ferr, frame, serialPath, 19200),
 			planErr:    ferr,
 			apply: func() error {

@@ -93,10 +93,10 @@ against real hardware, not just statically).
 
 | Command | Bytes |
 |---|---|
-| `led_set_on` | `FA 03 06 01 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l on` on real hardware) |
-| `led_set_off` | `FA 03 06 00 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l off` on real hardware) |
-| `led_blink` | `FA 03 06 02 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l blinking` on real hardware) |
-| `led_breath` | `FA 03 06 04 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l breathing` on real hardware) |
+| `led_set_on` | `FA 03 06 01 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l power on` on real hardware - the CLI's own zone word, "power", was added later for consistency with EX2/EX4; the frame itself is unaffected) |
+| `led_set_off` | `FA 03 06 00 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l power off` on real hardware) |
+| `led_blink` | `FA 03 06 02 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l power blinking` on real hardware) |
+| `led_breath` | `FA 03 06 04 00 00 FB` (confirmed via `wd-control-tool -b ex2u -l power breathing` on real hardware) |
 | `sys_ready` | `FA 03 01 00 00 00 FB` |
 | `sys_silent` | `FA 03 03 00 00 00 FB` |
 | `sys_shutdown` | `FA 03 03 01 00 00 FB` (confirmed genuine hard power cut, not cosmetic) |
@@ -785,14 +785,17 @@ EX2U's own status LED) no `/dev/ttyS1` MCU traffic at all.
   behaves correctly with one), so `wd-control-tool` reports `blinking`
   as an error for these two zones rather than assuming a trigger
   exists and guessing its name.
-- **No `power` zone, no hd2/hd3** in this scheme - EX2U's power LED
-  is still the single MCU-driven status LED (`-l on/off/blinking/
-  breathing`, no zone/color), and EX2U physically has only two bays.
-- The CLI tells the two `-l`/`--led` forms on EX2U apart from the very
-  next token alone, before any real validation: `hd0`/`hd1` selects
-  the three-word `ZONE COLOR STATE` form below; anything else selects
-  the one-word status-LED `STATE` form above (see `arityFor`'s own
-  doc comment in `cmd/wd-control-tool/main.go`).
+- **No hd2/hd3** in this scheme - EX2U physically has only two bays.
+  `power` IS a valid zone word for EX2U, but it's a completely
+  different mechanism (the single MCU-driven status LED, `-l power
+  on/off/blinking/breathing`, no color - see "EX2U protocol" above),
+  reached by the CLI's OTHER `-l`/`--led` form, not this sysfs one.
+- The CLI tells the two `-l`/`--led` forms on EX2U apart from the
+  very next token alone, before any real validation: `hd0`/`hd1`
+  selects this three-word `ZONE COLOR STATE` sysfs form; `power`
+  selects the two-word `power STATE` status-LED form instead; anything
+  else is a usage error (see `arityFor`'s own doc comment in
+  `cmd/wd-control-tool/main.go`).
 
 | Command | Effect |
 |---|---|

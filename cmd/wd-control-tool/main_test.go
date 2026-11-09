@@ -1253,7 +1253,7 @@ func TestRun_RealRun_EX2_PowerLedThenFanRPM_BothSucceed(t *testing.T) {
 func TestRun_RealRun_EX2U_FanThenLed_BothSucceed(t *testing.T) {
 	fake := fakemcu.New(t)
 
-	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-f", "25", "-l", "on"})
+	code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-f", "25", "-l", "power", "on"})
 	if code != exitOK {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}
@@ -1711,7 +1711,7 @@ func TestRun_RealRun_HardwareIOErrorOnBadSerialPath(t *testing.T) {
 	cases := [][]string{
 		{"-b", "ex2u", "--serial", bad, "-f", "50"},
 		{"-b", "ex4", "--serial", bad, "-f", "2"},   // found missing via go tool cover: EX4's fan apply() had no coverage of mcu.Open's error branch at all
-		{"-b", "ex2u", "--serial", bad, "-l", "on"}, // same gap, EX2U's led apply()
+		{"-b", "ex2u", "--serial", bad, "-l", "power", "on"}, // same gap, EX2U's led apply()
 		{"-b", "ex4", "--serial", bad, "-d", "hi"},
 		{"-b", "ex4", "--serial", bad, "-r", "w"},
 		{"-b", "ex2", "--serial", bad, "-r", "w"},                  // same gap, buildRTCWriteAction's EX2 apply() - found via go tool cover, only EX4's own mcu.Open error branch had a case here
@@ -1785,16 +1785,15 @@ func TestRun_LEDAllZonesColorsStates(t *testing.T) {
 	}
 }
 
-// EX2U's own led vocabulary (a single STATE argument, not EX4's
-// zone/color/state scheme) has its own alias pairs - "blinking"/
-// "blink" and "breathing"/"breathe" - fully exercised at the
-// mcu.EX2ULEDFrame level (pkg/mcu/ex2u_test.go), but never all
-// together through the actual CLI dispatch path
-// (buildLEDAction -> run()). Close that the same way
-// TestRun_LEDAllZonesColorsStates closes it for EX4.
+// EX2U's own status-LED vocabulary ("power STATE", no color) has
+// its own alias pairs - "blinking"/"blink" and "breathing"/
+// "breathe" - fully exercised at the mcu.EX2ULEDFrame level
+// (pkg/mcu/ex2u_test.go), but never all together through the actual
+// CLI dispatch path (buildLEDAction -> run()). Close that the same
+// way TestRun_LEDAllZonesColorsStates closes it for EX4.
 func TestRun_LEDAllStates_EX2U(t *testing.T) {
 	for _, state := range []string{"on", "off", "blinking", "blink", "breathing", "breathe"} {
-		code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-l", state})
+		code, out, errOut := captureRun(t, []string{"-b", "ex2u", "-n", "-l", "power", state})
 		if code != exitOK || !strings.Contains(out, "would") || strings.Contains(out, "would fail") {
 			t.Errorf("state=%q: code=%d out=%q err=%q", state, code, out, errOut)
 		}
@@ -1830,26 +1829,27 @@ func TestParseArgs_BoardAnywhereBeforeModeFlags(t *testing.T) {
 
 // Regression test for a bug the -b-look-alike-argument fix itself
 // introduced (caught by actually running the command, not just
-// reading the diff): `-l on -b ex2u` is a perfectly ordinary command
-// - EX2U's single-token led state, then the board, in the order
+// reading the diff): `-l power on -b ex2u` is a perfectly ordinary
+// command - EX2U's two-token led state, then the board, in the order
 // "-b may appear anywhere" explicitly promises is fine (see
 // TestParseArgs_BoardAnywhereBeforeModeFlags) - but the fix's
 // conservative "assume -l takes 3 arguments when board isn't known
 // yet" guess, applied here, skipped 3 tokens ("on","-b","ex2u")
-// instead of EX2U's real 1 ("on"), eating the genuine -b/--board
-// flag along with it and failing with "-b/--board is required".
+// instead of EX2U's real 2 ("power","on"), eating the genuine
+// -b/--board flag along with it and failing with "-b/--board is
+// required".
 // Fixed by adding a separate, non-authoritative hint pass (which
 // doesn't try to skip anything, the same way the original pre-fix
 // code worked) used ONLY to size this one skip correctly ahead of
 // time, while the real, skip-aware pass remains authoritative for
 // everything else - including the original bug this whole thing
 // started from, covered by TestRun_ActionArgumentThatLooksLikeBoardFlag.
-func TestRun_LedBeforeBoard_EX2U_SingleArgArity(t *testing.T) {
-	code, out, errOut := captureRun(t, []string{"-l", "on", "-b", "ex2u", "-n"})
+func TestRun_LedBeforeBoard_EX2U_PowerArgArity(t *testing.T) {
+	code, out, errOut := captureRun(t, []string{"-l", "power", "on", "-b", "ex2u", "-n"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
 	}
-	if !strings.Contains(out, "led on to EX2U") {
+	if !strings.Contains(out, "led power on to EX2U") {
 		t.Errorf("out=%q, want the led action described", out)
 	}
 }
@@ -1877,11 +1877,11 @@ func TestRun_LedBeforeBoard_EX2U_HDBayArgArity(t *testing.T) {
 // multiple occurrences, not just a lone one, and alongside another
 // action type's own fixed-arity argument.
 func TestRun_MultipleActionsBeforeBoard_EX2U(t *testing.T) {
-	code, out, errOut := captureRun(t, []string{"-f", "50", "-l", "on", "-l", "off", "-b", "ex2u", "-n"})
+	code, out, errOut := captureRun(t, []string{"-f", "50", "-l", "power", "on", "-l", "power", "off", "-b", "ex2u", "-n"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
 	}
-	if !strings.Contains(out, "fan 50%") || !strings.Contains(out, "led on to EX2U") || !strings.Contains(out, "led off to EX2U") {
+	if !strings.Contains(out, "fan 50%") || !strings.Contains(out, "led power on to EX2U") || !strings.Contains(out, "led power off to EX2U") {
 		t.Errorf("out=%q, want all 3 actions described", out)
 	}
 }
@@ -1914,11 +1914,11 @@ func TestRun_LedBeforeConflictingBoards_EX2U(t *testing.T) {
 // - so an ALIAS of EX2U ("ex2-ultra", not the literal "ex2u") must
 // resolve the hint just as correctly as the canonical spelling does.
 func TestRun_LedBeforeBoard_EX2U_ViaAlias(t *testing.T) {
-	code, out, errOut := captureRun(t, []string{"-l", "on", "-b", "ex2-ultra", "-n"})
+	code, out, errOut := captureRun(t, []string{"-l", "power", "on", "-b", "ex2-ultra", "-n"})
 	if code != exitOK {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
 	}
-	if !strings.Contains(out, "led on to EX2U") {
+	if !strings.Contains(out, "led power on to EX2U") {
 		t.Errorf("out=%q, want the led action described", out)
 	}
 }
@@ -1951,12 +1951,12 @@ func TestParseArgs_MissingValueForBoardOrSerial(t *testing.T) {
 }
 
 func TestParseArgs_LedArityDependsOnBoard(t *testing.T) {
-	a, err := parseArgs([]string{"-b", "ex2u", "-l", "breathing"})
+	a, err := parseArgs([]string{"-b", "ex2u", "-l", "power", "breathing"})
 	if err != nil {
 		t.Fatalf("parseArgs: %v", err)
 	}
-	if len(a.actions) != 1 || len(a.actions[0].args) != 1 {
-		t.Errorf("ex2u led actions = %+v, want 1 action with 1 arg", a.actions)
+	if len(a.actions) != 1 || len(a.actions[0].args) != 2 {
+		t.Errorf("ex2u led actions = %+v, want 1 action with 2 args", a.actions)
 	}
 
 	b, err := parseArgs([]string{"-b", "ex4", "-l", "power", "blue", "on"})
@@ -2493,7 +2493,8 @@ func TestRun_UsageExamplesActuallyWork(t *testing.T) {
 func TestRun_ReadmeExamplesActuallyWork(t *testing.T) {
 	examples := [][]string{
 		{"-b", "ex2u", "-f", "50"},
-		{"-b", "ex2u", "-l", "breathing"},
+		{"-b", "ex2u", "-l", "power", "breathing"},
+		{"-b", "ex2u", "-l", "hd0", "blue", "on"},
 		{"-b", "ex2", "-f", "3"},
 		{"-b", "ex2", "--led", "power", "blue", "on"},
 		{"-b", "ex4", "-f", "2"},
@@ -2501,6 +2502,8 @@ func TestRun_ReadmeExamplesActuallyWork(t *testing.T) {
 		{"-b", "ex4", "--display", "Booting..."},
 		{"-b", "ex4", "--sleep", "on"},
 		{"-b", "ex4", "-r", "w"},
+		{"-b", "ex2", "-r", "r"},
+		{"-b", "ex2", "-r", "s"},
 		{"-b", "ex2", "--led", "power", "blue", "on", "-f", "1"},
 		{"-b", "ex4", "-n", "-D", "--led", "power", "blue", "on"},
 	}
@@ -2562,7 +2565,7 @@ func TestRun_LongActionChainBeforeBoard_EX2U(t *testing.T) {
 	const n = 200
 	var args []string
 	for i := 0; i < n; i++ {
-		args = append(args, "-l", "on")
+		args = append(args, "-l", "power", "on")
 	}
 	args = append(args, "-b", "ex2u", "-n")
 
@@ -2573,7 +2576,7 @@ func TestRun_LongActionChainBeforeBoard_EX2U(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}
-	if got := strings.Count(out, "led on to EX2U"); got != n {
+	if got := strings.Count(out, "led power on to EX2U"); got != n {
 		t.Errorf("got %d described actions, want %d", got, n)
 	}
 	if elapsed > 2*time.Second {
@@ -2763,13 +2766,13 @@ func TestRun_DryRun_EX2UHDBayLed(t *testing.T) {
 	}
 }
 
-// EX2U's own status LED ("-l on") and its hd-bay LEDs ("-l hd0 ...")
-// share the same "-l"/"--led" flag but a different arity, decided
-// from the very next token alone (see arityFor's own doc comment) -
-// confirms the dispatch actually tells them apart rather than one
-// shadowing the other.
+// EX2U's own status LED ("-l power on") and its hd-bay LEDs ("-l hd0
+// ...") share the same "-l"/"--led" flag but a different arity,
+// decided from the very next token alone (see arityFor's own doc
+// comment) - confirms the dispatch actually tells them apart rather
+// than one shadowing the other.
 func TestRun_DryRun_EX2U_LedStatusVsHDBay_DispatchCorrectly(t *testing.T) {
-	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-l", "on"})
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-D", "-l", "power", "on"})
 	if code != exitOK {
 		t.Fatalf("status LED: code=%d out=%q", code, out)
 	}
@@ -2786,6 +2789,21 @@ func TestRun_DryRun_EX2U_LedStatusVsHDBay_DispatchCorrectly(t *testing.T) {
 	}
 	if !strings.Contains(out, "/sys/class/leds") {
 		t.Errorf("hd-bay: out=%q, want it routed through sysfs", out)
+	}
+}
+
+// EX2U's "-l" now always needs a zone word first ("power" or
+// "hd0"/"hd1" - see arityFor's own doc comment), matching EX2/EX4's
+// own zone-first syntax; a bare state word with no zone (the OLD
+// syntax, before this requirement) must report a clear error rather
+// than being silently misread as a zone itself.
+func TestRun_EX2ULed_RejectsMissingZone(t *testing.T) {
+	code, out, _ := captureRun(t, []string{"-b", "ex2u", "-n", "-l", "on"})
+	if code != exitOK {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+	if !strings.Contains(out, "would fail") || !strings.Contains(out, "needs a zone") {
+		t.Errorf("out=%q, want a clear \"needs a zone\" failure", out)
 	}
 }
 
@@ -2828,7 +2846,7 @@ func TestRun_RealRun_EX2ULed_SendsCorrectFrameForEachState(t *testing.T) {
 	}
 	for _, c := range cases {
 		fake := fakemcu.New(t)
-		code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-l", c.state})
+		code, _, errOut := captureRun(t, []string{"-b", "ex2u", "--serial", fake.SlavePath, "-l", "power", c.state})
 		if code != exitOK {
 			t.Fatalf("state=%q: code=%d err=%q", c.state, code, errOut)
 		}
